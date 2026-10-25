@@ -1,3 +1,5 @@
+#include "spec.h"
+
 // clang-format off
 struct buf;
 struct context;
@@ -22,6 +24,30 @@ void            bunpin(struct buf*);
 void            consoleinit(void);
 void            consoleintr(int);
 void            consputc(int);
+
+// speculation lifecycle (spec_state.c)
+void            specinit(void);
+spec_id_t       spec_current_id(void);
+int             spec_get_state(spec_id_t, enum spec_state*);
+int             spec_begin(void);
+int             spec_commit(void);
+int             spec_abort(void);
+int             spec_join(spec_id_t);
+void            spec_leave(spec_id_t);
+int             spec_op_enter(spec_id_t);
+void            spec_op_leave(spec_id_t);
+
+// speculative shadow blocks (bio.c)
+int             spec_shadow_count(spec_id_t);
+int             spec_shadow_get(spec_id_t, int, uint*, uint*, char*);
+void            spec_shadow_discard(spec_id_t);
+
+// speculative filesystem publication (log.c)
+int             spec_fs_commit(spec_id_t);
+
+// speculative external output (console.c and pipe.c)
+int             spec_output_flush(spec_id_t);
+void            spec_output_discard(spec_id_t);
 
 // exec.c
 int             kexec(char*, char**);

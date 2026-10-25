@@ -110,3 +110,21 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64
+sys_xbegin(void)
+{
+  return spec_begin();
+}
+
+uint64
+sys_xcommit(void)
+{
+  return spec_commit();
+}
+
+uint64
+sys_xabort(void)
+{
+  return spec_abort();
+}

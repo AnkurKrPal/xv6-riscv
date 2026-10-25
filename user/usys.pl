@@ -43,3 +43,6 @@ entry("sbrk");
 entry("pause");
 entry("uptime");
 entry("sync");
+entry("xbegin");
+entry("xcommit");
+entry("xabort");

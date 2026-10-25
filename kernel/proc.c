@@ -49,11 +49,13 @@ procinit(void)
 {
   struct proc *p;
 
+  specinit();
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
   for (p = proc; p < &proc[NPROC]; p++) {
     initlock(&p->lock, "proc");
     p->state = UNUSED;
+    p->spec = SPEC_ID_NONE;
     p->kstack = KSTACK((int)(p - proc));
   }
 }
@@ -124,6 +126,7 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->spec = SPEC_ID_NONE;
 
   // Allocate a trapframe page.
   if ((p->trapframe = (struct trapframe *)kalloc()) == 0) {
@@ -167,6 +170,7 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+  p->spec = SPEC_ID_NONE;
   p->state = UNUSED;
 }
 
@@ -259,6 +263,7 @@ int
 kfork(void)
 {
   int i, pid;
+  spec_id_t inherited_spec;
   struct proc *np;
   struct proc *p = myproc();
 
@@ -267,8 +272,25 @@ kfork(void)
     return -1;
   }
 
+  // A child created during speculation joins the same group.  Joining
+  // before copying memory makes it impossible for a commit to start after
+  // the ACTIVE check but before the child is counted as a member.
+  inherited_spec = spec_current_id();
+  if (inherited_spec != SPEC_ID_NONE) {
+    if (spec_join(inherited_spec) != SPEC_OK) {
+      freeproc(np);
+      release(&np->lock);
+      return -1;
+    }
+    np->spec = inherited_spec;
+  }
+
   // Copy user memory from parent to child.
   if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0) {
+    if (np->spec != SPEC_ID_NONE) {
+      spec_leave(np->spec);
+      np->spec = SPEC_ID_NONE;
+    }
     freeproc(np);
     release(&np->lock);
     return -1;
@@ -343,6 +365,11 @@ kexit(int status)
   iput(p->cwd);
   end_op();
   p->cwd = 0;
+
+  if (p->spec != SPEC_ID_NONE) {
+    spec_leave(p->spec);
+    p->spec = SPEC_ID_NONE;
+  }
 
   acquire(&wait_lock);
 
