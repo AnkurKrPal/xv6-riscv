@@ -159,12 +159,48 @@ spec_output_enqueue(spec_id_t spec, int target, struct pipe *pi, const char *dat
 }
 
 int
+spec_output_avail(spec_id_t spec)
+{
+  struct spec_out_queue *q;
+  int avail;
+
+  if (spec == SPEC_ID_NONE)
+    return 0;
+
+  acquire(&spec_out_table.lock);
+  q = find_queue_locked(spec);
+  if (q == 0) {
+    int has_free = 0;
+    for (int i = 0; i < SPEC_OUTPUT_MAX_SPECS; i++) {
+      if (spec_out_table.queues[i].spec == SPEC_ID_NONE) {
+        has_free = 1;
+        break;
+      }
+    }
+    avail = has_free ? (SPEC_OUTPUT_MAX_CHUNKS * SPEC_OUTPUT_CHUNK_SIZE) : 0;
+  } else {
+    int free_chunks = SPEC_OUTPUT_MAX_CHUNKS - q->count;
+    avail = free_chunks * SPEC_OUTPUT_CHUNK_SIZE;
+    if (q->count > 0) {
+      int last_idx = (q->tail - 1 + SPEC_OUTPUT_MAX_CHUNKS) % SPEC_OUTPUT_MAX_CHUNKS;
+      avail += (SPEC_OUTPUT_CHUNK_SIZE - q->chunks[last_idx].len);
+    }
+  }
+  release(&spec_out_table.lock);
+  return avail;
+}
+
+int
 spec_output_write_console(spec_id_t spec, int user_src, uint64 src, int n)
 {
   char kbuf[SPEC_OUTPUT_CHUNK_SIZE];
   int written = 0;
 
   if (spec == SPEC_ID_NONE || n <= 0)
+    return -1;
+
+  // Step 6 (L9): Fail safely with -1 if output queue is full or cannot fit the write
+  if (spec_output_avail(spec) < n)
     return -1;
 
   while (written < n) {
@@ -180,9 +216,7 @@ spec_output_write_console(spec_id_t spec, int user_src, uint64 src, int n)
 
     if (spec_output_enqueue(spec, SPEC_OUT_CONSOLE, 0, kbuf, chunk_len) != SPEC_OK) {
       // Queue is full; fail safely without externalizing
-      if (written == 0)
-        return -1;
-      break;
+      return -1;
     }
     written += chunk_len;
   }
@@ -197,15 +231,17 @@ spec_output_write_pipe(spec_id_t spec, struct pipe *pi, const char *kbuf, int n)
   if (spec == SPEC_ID_NONE || pi == 0 || n <= 0)
     return -1;
 
+  // Step 6 (L9): Fail safely with -1 if output queue is full or cannot fit the write
+  if (spec_output_avail(spec) < n)
+    return -1;
+
   while (written < n) {
     int chunk_len = SPEC_OUTPUT_CHUNK_SIZE;
     if (chunk_len > n - written)
       chunk_len = n - written;
 
     if (spec_output_enqueue(spec, SPEC_OUT_PIPE, pi, kbuf + written, chunk_len) != SPEC_OK) {
-      if (written == 0)
-        return -1;
-      break;
+      return -1;
     }
     written += chunk_len;
   }
@@ -251,7 +287,12 @@ spec_output_flush(spec_id_t spec)
     // (such as uartwrite acquiring tx_lock sleeplock) are called safely.
     if (has_item) {
       if (item.target == SPEC_OUT_CONSOLE) {
-        uartwrite(item.buf, item.len);
+        if (myproc() != 0) {
+          uartwrite(item.buf, item.len);
+        } else {
+          for (int i = 0; i < item.len; i++)
+            uartputc_sync(item.buf[i]);
+        }
       } else if (item.target == SPEC_OUT_PIPE) {
         // Hook for pipe delivery in subsequent step
       }
@@ -361,12 +402,23 @@ spec_output_selftest(void)
   if (!full_reached)
     panic("spec_output_selftest: bounded queue did not reject on overflow");
 
-  // 6. Test discard: aborting must clear all buffered entries cleanly
+  // 6. Test fail safely if queue is full: write must return -1
+  if (spec_output_write_pipe(test_id, (struct pipe*)1, testbuf, 50) != -1)
+    panic("spec_output_selftest: full queue did not fail safely with -1");
+
+  // 7. Test discard: aborting must clear all buffered entries cleanly
   spec_output_discard(test_id);
   if (!spec_output_is_empty(test_id) || spec_output_count(test_id) != 0 || spec_output_bytes(test_id) != 0)
     panic("spec_output_selftest: discard failed to reset queue");
 
-  printk("spec_output: bounded per-spec FIFO queue selftest PASSED\n");
+  // 8. Test flush: enqueue, flush, and ensure queue is drained
+  rc = spec_output_enqueue(test_id, SPEC_OUT_CONSOLE, 0, "test", 4);
+  if (rc != SPEC_OK || spec_output_is_empty(test_id))
+    panic("spec_output_selftest: enqueue before flush failed");
+  if (spec_output_flush(test_id) != SPEC_OK || !spec_output_is_empty(test_id))
+    panic("spec_output_selftest: flush failed to drain queue");
+
+  printk("\nspec_output: steps 5 & 6 (L4 flush/discard & L9 safe failure) PASSED\n");
 }
 
 void

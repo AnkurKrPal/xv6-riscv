@@ -54,6 +54,7 @@ int             spec_output_flush(spec_id_t);
 void            spec_output_discard(spec_id_t);
 int             spec_output_count(spec_id_t);
 int             spec_output_bytes(spec_id_t);
+int             spec_output_avail(spec_id_t);
 int             spec_output_is_empty(spec_id_t);
 
 
