@@ -50,6 +50,8 @@ procinit(void)
   struct proc *p;
 
   specinit();
+  spec_output_init();
+
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
   for (p = proc; p < &proc[NPROC]; p++) {

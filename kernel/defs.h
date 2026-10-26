@@ -45,9 +45,17 @@ void            spec_shadow_discard(spec_id_t);
 // speculative filesystem publication (log.c)
 int             spec_fs_commit(spec_id_t);
 
-// speculative external output (console.c and pipe.c)
+// speculative external output (spec_output.c)
+void            spec_output_init(void);
+int             spec_output_enqueue(spec_id_t, int, struct pipe*, const char*, int);
+int             spec_output_write_console(spec_id_t, int, uint64, int);
+int             spec_output_write_pipe(spec_id_t, struct pipe*, const char*, int);
 int             spec_output_flush(spec_id_t);
 void            spec_output_discard(spec_id_t);
+int             spec_output_count(spec_id_t);
+int             spec_output_bytes(spec_id_t);
+int             spec_output_is_empty(spec_id_t);
+
 
 // exec.c
 int             kexec(char*, char**);
