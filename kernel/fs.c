@@ -22,6 +22,31 @@
 #include "file.h"
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
+
+struct buf *spec_shadow_prepare(struct buf *);
+int spec_shadow_is_buffer(struct buf *);
+
+// Switch a locked buffer to its private copy before changing its data.
+static int
+prepare_write(struct buf **bp)
+{
+  struct buf *private;
+
+  private = spec_shadow_prepare(*bp);
+  if (private == 0)
+    return -1;
+  *bp = private;
+  return 0;
+}
+
+// Keep shadow changes out of the shared filesystem journal.
+static void
+fs_log_write(struct buf *bp)
+{
+  if (!spec_shadow_is_buffer(bp))
+    log_write(bp);
+}
+
 // there should be one superblock per disk device, but we run with
 // only one device
 struct superblock sb;
@@ -49,15 +74,20 @@ fsinit(int dev)
 }
 
 // Zero a block.
-static void
+static int
 bzero(int dev, int bno)
 {
   struct buf *bp;
 
   bp = bread(dev, bno);
+  if (prepare_write(&bp) < 0) {
+    brelse(bp);
+    return -1;
+  }
   memset(bp->data, 0, BSIZE);
-  log_write(bp);
+  fs_log_write(bp);
   brelse(bp);
+  return 0;
 }
 
 // Blocks.
@@ -76,10 +106,17 @@ balloc(uint dev)
     for (bi = 0; bi < BPB && b + bi < sb.size; bi++) {
       m = 1 << (bi % 8);
       if ((bp->data[bi / 8] & m) == 0) { // Is block free?
+        if (prepare_write(&bp) < 0) {
+          brelse(bp);
+          return 0;
+        }
+        if (bp->data[bi / 8] & m)
+          continue;
         bp->data[bi / 8] |= m;           // Mark block in use.
-        log_write(bp);
+        fs_log_write(bp);
         brelse(bp);
-        bzero(dev, b + bi);
+        if (bzero(dev, b + bi) < 0)
+          return 0;
         return b + bi;
       }
     }
@@ -101,8 +138,14 @@ bfree(int dev, uint b)
   m = 1 << (bi % 8);
   if ((bp->data[bi / 8] & m) == 0)
     panic("freeing free block");
+  if (prepare_write(&bp) < 0) {
+    brelse(bp);
+    return;
+  }
+  if ((bp->data[bi / 8] & m) == 0)
+    panic("freeing free shadow block");
   bp->data[bi / 8] &= ~m;
-  log_write(bp);
+  fs_log_write(bp);
   brelse(bp);
 }
 
@@ -208,9 +251,18 @@ ialloc(uint dev, short type)
     bp = bread(dev, IBLOCK(inum, sb));
     dip = (struct dinode *)bp->data + inum % IPB;
     if (dip->type == 0) { // a free inode
+      if (prepare_write(&bp) < 0) {
+        brelse(bp);
+        return 0;
+      }
+      dip = (struct dinode *)bp->data + inum % IPB;
+      if (dip->type != 0) {
+        brelse(bp);
+        continue;
+      }
       memset(dip, 0, sizeof(*dip));
       dip->type = type;
-      log_write(bp); // mark it allocated on the disk
+      fs_log_write(bp); // mark it allocated on the disk
       brelse(bp);
       return iget(dev, inum);
     }
@@ -231,6 +283,10 @@ iupdate(struct inode *ip)
   struct dinode *dip;
 
   bp = bread(ip->dev, IBLOCK(ip->inum, sb));
+  if (prepare_write(&bp) < 0) {
+    brelse(bp);
+    return;
+  }
   dip = (struct dinode *)bp->data + ip->inum % IPB;
   dip->type = ip->type;
   dip->major = ip->major;
@@ -238,7 +294,7 @@ iupdate(struct inode *ip)
   dip->nlink = ip->nlink;
   dip->size = ip->size;
   memmove(dip->addrs, ip->addrs, sizeof(ip->addrs));
-  log_write(bp);
+  fs_log_write(bp);
   brelse(bp);
 }
 
@@ -333,9 +389,15 @@ static void
 ifree(uint dev, uint inum)
 {
   struct buf *bp = bread(dev, IBLOCK(inum, sb));
-  struct dinode *dip = (struct dinode *)bp->data + inum % IPB;
+  struct dinode *dip;
+
+  if (prepare_write(&bp) < 0) {
+    brelse(bp);
+    return;
+  }
+  dip = (struct dinode *)bp->data + inum % IPB;
   dip->type = 0;
-  log_write(bp);
+  fs_log_write(bp);
   brelse(bp);
 }
 
@@ -447,8 +509,17 @@ bmap(struct inode *ip, uint bn)
     if ((addr = a[bn]) == 0) {
       addr = balloc(ip->dev);
       if (addr) {
-        a[bn] = addr;
-        log_write(bp);
+        if (prepare_write(&bp) < 0) {
+          brelse(bp);
+          return 0;
+        }
+        a = (uint *)bp->data;
+        if (a[bn] == 0) {
+          a[bn] = addr;
+          fs_log_write(bp);
+        } else {
+          addr = a[bn];
+        }
       }
     }
     brelse(bp);
@@ -556,14 +627,18 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
     if (addr == 0)
       break;
     bp = bread(ip->dev, addr);
-    m = min(n - tot, BSIZE - off % BSIZE);
-    if (either_copyin(bp->data + (off % BSIZE), user_src, src, m) == -1) {
-      // Might have partially updated the block, so we need to log it.
-      log_write(bp);
+    if (prepare_write(&bp) < 0) {
       brelse(bp);
       break;
     }
-    log_write(bp);
+    m = min(n - tot, BSIZE - off % BSIZE);
+    if (either_copyin(bp->data + (off % BSIZE), user_src, src, m) == -1) {
+      // Might have partially updated the block, so we need to log it.
+      fs_log_write(bp);
+      brelse(bp);
+      break;
+    }
+    fs_log_write(bp);
     brelse(bp);
   }
 

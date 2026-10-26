@@ -132,8 +132,8 @@ shadow_release(struct buf *b)
 }
 
 // Report whether a buffer belongs to the shadow table.
-static int
-shadow_is_buffer(struct buf *b)
+int
+spec_shadow_is_buffer(struct buf *b)
 {
   int found;
 
@@ -141,6 +141,53 @@ shadow_is_buffer(struct buf *b)
   found = shadow_from_buf_locked(b) != 0;
   release(&shadow_table.lock);
   return found;
+}
+
+// Replace a locked real buffer with a locked private copy for an active spec.
+// On failure, return zero and leave the original buffer locked and unchanged.
+struct buf *
+spec_shadow_prepare(struct buf *b)
+{
+  struct shadow *entry;
+  spec_id_t spec;
+  enum spec_state state;
+
+  if (!holdingsleep(&b->lock))
+    panic("shadow_prepare");
+
+  spec = spec_current_id();
+  if (spec == SPEC_ID_NONE)
+    return b;
+  if (spec_get_state(spec, &state) != SPEC_OK || state != SPEC_STATE_ACTIVE)
+    return b;
+
+  acquire(&shadow_table.lock);
+  entry = shadow_from_buf_locked(b);
+  if (entry != 0) {
+    if (entry->spec != spec)
+      panic("shadow owner");
+    release(&shadow_table.lock);
+    return b;
+  }
+
+  entry = shadow_find_locked(spec, b->dev, b->blockno);
+  if (entry != 0) {
+    entry->buf.refcnt++;
+  } else {
+    entry = shadow_alloc_locked(b->dev, b->blockno);
+    if (entry != 0) {
+      memmove(entry->buf.data, b->data, BSIZE);
+      entry->spec = spec;
+    }
+  }
+  release(&shadow_table.lock);
+
+  if (entry == 0)
+    return 0;
+
+  acquiresleep(&entry->buf.lock);
+  brelse(b);
+  return &entry->buf;
 }
 
 // Add a persistent reference when the log pins a shadow buffer.
@@ -391,7 +438,7 @@ bwrite(struct buf *b)
 {
   if (!holdingsleep(&b->lock))
     panic("bwrite");
-  if (shadow_is_buffer(b))
+  if (spec_shadow_is_buffer(b))
     return;
   virtio_disk_rw(b, 1);
 }
