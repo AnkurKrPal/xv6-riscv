@@ -62,6 +62,14 @@ struct {
 int
 consolewrite(int user_src, uint64 src, int n)
 {
+  struct proc *p = myproc();
+
+  // Step 3 (L2): Intercept speculative user-console writes into private queue
+  if (p && p->spec != SPEC_ID_NONE) {
+    return spec_output_write_console(p->spec, user_src, src, n);
+  }
+
+  // Step 4 (L3): Keep ordinary non-speculative console output immediate
   char buf[32]; // move batches from user space to uart.
   int i = 0;
 
