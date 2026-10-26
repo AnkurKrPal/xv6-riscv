@@ -31,7 +31,10 @@ spec_id_t       spec_current_id(void);
 int             spec_get_state(spec_id_t, enum spec_state*);
 int             spec_begin(void);
 int             spec_commit(void);
+int             spec_commit_transaction(void);
 int             spec_abort(void);
+int             spec_commit_start(spec_id_t);
+int             spec_commit_finish(spec_id_t, int);
 int             spec_join(spec_id_t);
 void            spec_leave(spec_id_t);
 int             spec_op_enter(spec_id_t);
@@ -40,6 +43,7 @@ void            spec_op_leave(spec_id_t);
 // speculative shadow blocks (bio.c)
 int             spec_shadow_count(spec_id_t);
 int             spec_shadow_get(spec_id_t, int, uint*, uint*, char*);
+int             spec_shadow_store(spec_id_t, uint, uint, const char*);
 void            spec_shadow_discard(spec_id_t);
 
 // speculative filesystem publication (log.c)

@@ -14,6 +14,7 @@ OBJS = \
   $K/vm.o \
   $K/proc.o \
   $K/spec_state.o \
+  $K/spec_commit.o \
   $K/spec_output.o \
   $K/swtch.o \
   $K/trampoline.o \

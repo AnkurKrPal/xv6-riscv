@@ -44,12 +44,46 @@ struct log {
   int committing;  // in commit(), please wait.
   int dev;
   int ncommit;
+  int spec_committing;
   struct logheader lh;
 };
 struct log log;
 
 static void recover_from_log(void);
 static void commit();
+
+static int
+reserve_spec_log(int blocks)
+{
+  if (blocks < 0 || blocks > LOGBLOCKS)
+    return SPEC_ERR_NO_SPACE;
+
+  acquire(&log.lock);
+  while (log.committing || log.spec_committing || log.outstanding != 0 ||
+         log.lh.n != 0) {
+    sleep_prepare(&log);
+    release(&log.lock);
+    sleep();
+    acquire(&log.lock);
+  }
+  log.spec_committing = 1;
+  log.committing = 1;
+  log.outstanding = 1;
+  release(&log.lock);
+  return SPEC_OK;
+}
+
+static void
+release_spec_log(void)
+{
+  acquire(&log.lock);
+  log.outstanding = 0;
+  log.committing = 0;
+  log.spec_committing = 0;
+  log.ncommit++;
+  wakeup(&log);
+  release(&log.lock);
+}
 
 void
 initlog(int dev, struct superblock *sb)
@@ -130,7 +164,7 @@ begin_op(void)
 {
   acquire(&log.lock);
   while (1) {
-    if (log.committing) {
+    if (log.committing || log.spec_committing) {
       sleep_prepare(&log);
       release(&log.lock);
       sleep();
@@ -224,8 +258,20 @@ void
 log_write(struct buf *b)
 {
   int i;
+  spec_id_t spec;
+  enum spec_state state;
 
   acquire(&log.lock);
+  spec = spec_current_id();
+  if (!log.spec_committing && spec != SPEC_ID_NONE &&
+      spec_get_state(spec, &state) == SPEC_OK &&
+      state == SPEC_STATE_ACTIVE) {
+    release(&log.lock);
+    if (spec_shadow_store(spec, b->dev, b->blockno,
+                          (const char *)b->data) != SPEC_OK)
+      panic("log_write: speculative journal full");
+    return;
+  }
   if (log.lh.n >= LOGBLOCKS)
     panic("too big a transaction");
   if (log.outstanding < 1)
@@ -241,6 +287,62 @@ log_write(struct buf *b)
     log.lh.n++;
   }
   release(&log.lock);
+}
+
+/*
+ * Publish one complete speculative write set. The caller must have moved the
+ * speculation to COMMITTING, so bread() returns real cache buffers here.
+ */
+int
+spec_fs_commit(spec_id_t spec)
+{
+  int count, i;
+  int result = SPEC_OK;
+  int blocks[LOGBLOCKS];
+  int nblocks = 0;
+  enum spec_state state;
+
+  if (spec == SPEC_ID_NONE ||
+      spec_get_state(spec, &state) != SPEC_OK ||
+      state != SPEC_STATE_COMMITTING)
+    return SPEC_ERR_BAD_ID;
+  count = spec_shadow_count(spec);
+  if (reserve_spec_log(count) != SPEC_OK)
+    return SPEC_ERR_NO_SPACE;
+
+  for (i = 0; i < count; i++) {
+    uint dev, blockno;
+    char data[BSIZE];
+    struct buf *bp;
+
+    if (spec_shadow_get(spec, i, &dev, &blockno, data) != SPEC_OK) {
+      result = SPEC_ERR_COMMIT;
+      break;
+    }
+    bp = bread(dev, blockno);
+    memmove(bp->data, data, BSIZE);
+    log_write(bp);
+    brelse(bp);
+  }
+
+  if (result == SPEC_OK) {
+    commit();
+  } else {
+    acquire(&log.lock);
+    nblocks = log.lh.n;
+    for (i = 0; i < nblocks; i++)
+      blocks[i] = log.lh.block[i];
+    log.lh.n = 0;
+    release(&log.lock);
+    for (i = 0; i < nblocks; i++) {
+      struct buf *bp = bread(log.dev, blocks[i]);
+      bunpin(bp);
+      brelse(bp);
+    }
+  }
+
+  release_spec_log();
+  return result;
 }
 
 uint64

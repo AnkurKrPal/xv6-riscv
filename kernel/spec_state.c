@@ -154,16 +154,76 @@ spec_begin(void)
   return SPEC_OK;
 }
 
-// Finish a speculation that currently has only the calling process as a
-// member.  Multi-process finalization needs the later freeze/quiescence work;
-// reject it for now instead of allowing a child to race with finalization.
-//
-// At this stage no shadow or output modules are connected, so completing an
-// empty speculation requires only the lifecycle state transition.  The commit
-// and abort hooks will be inserted between the transitional and terminal
-// states when those modules are integrated.
-static int
-finish_current(enum spec_state transition, enum spec_state terminal)
+// Begin the commit transition only when this process is the sole member.
+// This prevents a child from racing with the coordinator while the group is
+// being frozen.
+int
+spec_commit_start(spec_id_t id)
+{
+  struct proc *p = myproc();
+  struct spec_group *g;
+
+  if (p == 0 || id == SPEC_ID_NONE)
+    return SPEC_ERR_NO_ACTIVE;
+
+  acquire(&spectable.lock);
+  if (p->spec != id) {
+    release(&spectable.lock);
+    return SPEC_ERR_BAD_ID;
+  }
+  g = find_group(id);
+  if (g == 0) {
+    release(&spectable.lock);
+    return SPEC_ERR_BAD_ID;
+  }
+  if (g->state != SPEC_STATE_ACTIVE || g->members != 1) {
+    release(&spectable.lock);
+    return SPEC_ERR_BUSY;
+  }
+
+  g->state = SPEC_STATE_COMMITTING;
+  release(&spectable.lock);
+  return SPEC_OK;
+}
+
+int
+spec_commit_finish(spec_id_t id, int committed)
+{
+  struct proc *p = myproc();
+  struct spec_group *g;
+
+  if (p == 0 || id == SPEC_ID_NONE)
+    return SPEC_ERR_NO_ACTIVE;
+
+  acquire(&spectable.lock);
+  if (p->spec != id) {
+    release(&spectable.lock);
+    return SPEC_ERR_BAD_ID;
+  }
+  g = find_group(id);
+  if (g == 0 || g->state != SPEC_STATE_COMMITTING) {
+    release(&spectable.lock);
+    return SPEC_ERR_BUSY;
+  }
+
+  g->state = committed ? SPEC_STATE_COMMITTED : SPEC_STATE_ABORTING;
+  p->spec = SPEC_ID_NONE;
+  g->members = 0;
+  g->id = SPEC_ID_NONE;
+  g->state = committed ? SPEC_STATE_FREE : SPEC_STATE_ABORTED;
+  g->state = SPEC_STATE_FREE;
+  release(&spectable.lock);
+  return SPEC_OK;
+}
+
+int
+spec_commit(void)
+{
+  return spec_commit_transaction();
+}
+
+int
+spec_abort(void)
 {
   struct proc *p = myproc();
   struct spec_group *g;
@@ -178,37 +238,25 @@ finish_current(enum spec_state transition, enum spec_state terminal)
     release(&spectable.lock);
     return SPEC_ERR_NO_ACTIVE;
   }
-
   g = find_group(id);
-  if (g == 0) {
-    release(&spectable.lock);
-    return SPEC_ERR_BAD_ID;
-  }
-  if (g->state != SPEC_STATE_ACTIVE || g->members != 1) {
+  if (g == 0 || g->state != SPEC_STATE_ACTIVE || g->members != 1) {
     release(&spectable.lock);
     return SPEC_ERR_BUSY;
   }
+  g->state = SPEC_STATE_ABORTING;
+  release(&spectable.lock);
 
-  g->state = transition;
-  g->state = terminal;
+  spec_shadow_discard(id);
+  spec_output_discard(id);
+
+  acquire(&spectable.lock);
   p->spec = SPEC_ID_NONE;
   g->members = 0;
   g->id = SPEC_ID_NONE;
+  g->state = SPEC_STATE_ABORTED;
   g->state = SPEC_STATE_FREE;
   release(&spectable.lock);
   return SPEC_OK;
-}
-
-int
-spec_commit(void)
-{
-  return finish_current(SPEC_STATE_COMMITTING, SPEC_STATE_COMMITTED);
-}
-
-int
-spec_abort(void)
-{
-  return finish_current(SPEC_STATE_ABORTING, SPEC_STATE_ABORTED);
 }
 
 int
