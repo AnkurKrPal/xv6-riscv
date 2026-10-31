@@ -40,7 +40,7 @@ void            spec_leave(spec_id_t);
 int             spec_op_enter(spec_id_t);
 void            spec_op_leave(spec_id_t);
 
-// speculative shadow blocks (bio.c)
+// speculative shadow blocks (spec_shadow.c)
 int             spec_shadow_count(spec_id_t);
 int             spec_shadow_get(spec_id_t, int, uint*, uint*, char*);
 int             spec_shadow_store(spec_id_t, uint, uint, const char*);
