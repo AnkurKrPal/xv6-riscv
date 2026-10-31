@@ -111,6 +111,15 @@ int             pipealloc(struct file**, struct file**);
 void            pipeclose(struct pipe*, int);
 int             piperead(struct pipe*, uint64, int);
 int             pipewrite(struct pipe*, uint64, int);
+void            pipe_add_spec_ref(struct pipe*);
+void            pipe_drop_spec_ref(struct pipe*);
+int             pipe_deliver_spec_chunk(struct pipe*, const char*, int);
+void            pipe_selftest(void);
+void            pipe_reset_spec(struct pipe*, spec_id_t, int);
+
+// file.c
+void            pipe_spec_discard(spec_id_t);
+void            pipe_spec_commit(spec_id_t);
 
 // printk.c
 int             printk(char*, ...) __attribute__ ((format (printf, 1, 2)));

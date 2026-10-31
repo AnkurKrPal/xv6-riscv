@@ -248,6 +248,7 @@ spec_abort(void)
 
   spec_shadow_discard(id);
   spec_output_discard(id);
+  pipe_spec_discard(id);
 
   acquire(&spectable.lock);
   p->spec = SPEC_ID_NONE;

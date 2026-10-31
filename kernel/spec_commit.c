@@ -39,8 +39,10 @@ spec_commit_transaction(void)
   result = spec_output_flush(spec);
   if (result != SPEC_OK) {
     spec_output_discard(spec);
+    pipe_spec_discard(spec);
     spec_commit_finish(spec, 1);
     return result;
   }
+  pipe_spec_commit(spec);
   return spec_commit_finish(spec, 1);
 }

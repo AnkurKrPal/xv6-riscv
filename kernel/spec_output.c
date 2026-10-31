@@ -143,6 +143,9 @@ spec_output_enqueue(spec_id_t spec, int target, struct pipe *pi, const char *dat
     struct spec_out_chunk *c = &q->chunks[q->tail];
     c->target = target;
     c->pipe = pi;
+    if (target == SPEC_OUT_PIPE && pi != 0) {
+      pipe_add_spec_ref(pi);
+    }
     int take = (len < SPEC_OUTPUT_CHUNK_SIZE) ? len : SPEC_OUTPUT_CHUNK_SIZE;
     memmove(c->buf, data, take);
     c->len = take;
@@ -294,7 +297,11 @@ spec_output_flush(spec_id_t spec)
             uartputc_sync(item.buf[i]);
         }
       } else if (item.target == SPEC_OUT_PIPE) {
-        // Hook for pipe delivery in subsequent step
+        // Step 8 (L6) & Step 10 (L10): Deliver buffered pipe output to outside readers on commit
+        if (item.pipe != 0) {
+          pipe_deliver_spec_chunk(item.pipe, item.buf, item.len);
+          pipe_drop_spec_ref(item.pipe);
+        }
       }
     }
   }
@@ -313,6 +320,12 @@ spec_output_discard(spec_id_t spec)
   acquire(&spec_out_table.lock);
   q = find_queue_locked(spec);
   if (q != 0) {
+    for (int i = 0; i < q->count; i++) {
+      int idx = (q->head + i) % SPEC_OUTPUT_MAX_CHUNKS;
+      if (q->chunks[idx].target == SPEC_OUT_PIPE && q->chunks[idx].pipe != 0) {
+        pipe_drop_spec_ref(q->chunks[idx].pipe);
+      }
+    }
     q->spec = SPEC_ID_NONE;
     q->head = 0;
     q->tail = 0;
@@ -419,6 +432,7 @@ spec_output_selftest(void)
     panic("spec_output_selftest: flush failed to drain queue");
 
   printk("\nspec_output: steps 5 & 6 (L4 flush/discard & L9 safe failure) PASSED\n");
+
 }
 
 void

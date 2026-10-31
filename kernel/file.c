@@ -23,6 +23,7 @@ void
 fileinit(void)
 {
   initlock(&ftable.lock, "ftable");
+  pipe_selftest();
 }
 
 // Allocate a file structure.
@@ -176,4 +177,34 @@ filewrite(struct file *f, uint64 addr, int n)
   }
 
   return ret;
+}
+
+void
+pipe_spec_discard(spec_id_t spec)
+{
+  if (spec == SPEC_ID_NONE)
+    return;
+
+  acquire(&ftable.lock);
+  for (struct file *f = ftable.file; f < ftable.file + NFILE; f++) {
+    if (f->ref > 0 && f->type == FD_PIPE && f->pipe != 0) {
+      pipe_reset_spec(f->pipe, spec, 1);
+    }
+  }
+  release(&ftable.lock);
+}
+
+void
+pipe_spec_commit(spec_id_t spec)
+{
+  if (spec == SPEC_ID_NONE)
+    return;
+
+  acquire(&ftable.lock);
+  for (struct file *f = ftable.file; f < ftable.file + NFILE; f++) {
+    if (f->ref > 0 && f->type == FD_PIPE && f->pipe != 0) {
+      pipe_reset_spec(f->pipe, spec, 0);
+    }
+  }
+  release(&ftable.lock);
 }
