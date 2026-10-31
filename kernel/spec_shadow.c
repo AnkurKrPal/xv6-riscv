@@ -23,7 +23,7 @@ static struct {
 
 // Find an entry for an exact speculation, device, and block key.
 // Caller must hold shadow_table.lock.
-//added/modified by Saharsh B24CS1105
+//added by Saharsh B24CS1105
 static struct shadow *
 shadow_find_locked(spec_id_t spec, uint dev, uint blockno)
 {
@@ -38,7 +38,7 @@ shadow_find_locked(spec_id_t spec, uint dev, uint blockno)
 
 // Reserve a free entry and initialize its buffer identity.
 // Caller must hold shadow_table.lock.
-//added/modified by Saharsh B24CS1105
+//added by Saharsh B24CS1105
 static struct shadow *
 shadow_alloc_locked(uint dev, uint blockno)
 {
@@ -58,7 +58,7 @@ shadow_alloc_locked(uint dev, uint blockno)
 
 // Map an embedded shadow buffer back to its table entry.
 // Caller must hold shadow_table.lock.
-//added/modified by Saharsh B24CS1105
+//added by Saharsh B24CS1105
 static struct shadow *
 shadow_from_buf_locked(struct buf *b)
 {
@@ -70,7 +70,7 @@ shadow_from_buf_locked(struct buf *b)
 }
 
 // Initialize the bounded shadow table and each entry's sleep lock.
-//added/modified by Saharsh B24CS1105
+//added by Saharsh B24CS1105
 void
 spec_shadow_init(void)
 {
@@ -83,9 +83,9 @@ spec_shadow_init(void)
 }
 
 // Return the matching shadow buffer locked and referenced, or zero on a miss.
-//added/modified by Saharsh B24CS1105
-struct buf *
-spec_shadow_acquire(spec_id_t spec, uint dev, uint blockno)
+//added by Saharsh B24CS1105
+static struct buf *
+shadow_acquire(spec_id_t spec, uint dev, uint blockno)
 {
   struct shadow *entry;
 
@@ -101,8 +101,25 @@ spec_shadow_acquire(spec_id_t spec, uint dev, uint blockno)
   return &entry->buf;
 }
 
+// Return only the current active speculation's private block.
+// Ordinary readers and other speculation IDs cannot acquire this shadow.
+//added by Saharsh B24CS1105
+struct buf *
+spec_shadow_read(uint dev, uint blockno)
+{
+  spec_id_t spec;
+  enum spec_state state;
+
+  spec = spec_current_id();
+  if (spec == SPEC_ID_NONE)
+    return 0;
+  if (spec_get_state(spec, &state) != SPEC_OK || state != SPEC_STATE_ACTIVE)
+    return 0;
+  return shadow_acquire(spec, dev, blockno);
+}
+
 // Unlock and drop a shadow-buffer reference; return zero for normal buffers.
-//added/modified by Saharsh B24CS1105
+//added by Saharsh B24CS1105
 int
 spec_shadow_release(struct buf *b)
 {
@@ -127,7 +144,7 @@ spec_shadow_release(struct buf *b)
 }
 
 // Report whether a buffer belongs to the shadow table.
-//added/modified by Saharsh B24CS1105
+//added by Saharsh B24CS1105
 int
 spec_shadow_is_buffer(struct buf *b)
 {
@@ -141,7 +158,7 @@ spec_shadow_is_buffer(struct buf *b)
 
 // Replace a locked real buffer with a locked private copy for an active spec.
 // On failure, return zero and leave the original buffer locked and unchanged.
-//added/modified by Saharsh B24CS1105
+//added by Saharsh B24CS1105
 struct buf *
 spec_shadow_prepare(struct buf *b)
 {
@@ -188,7 +205,7 @@ spec_shadow_prepare(struct buf *b)
 }
 
 // Add a persistent reference when the log pins a shadow buffer.
-//added/modified by Saharsh B24CS1105
+//added by Saharsh B24CS1105
 int
 spec_shadow_pin(struct buf *b)
 {
@@ -203,7 +220,7 @@ spec_shadow_pin(struct buf *b)
 }
 
 // Remove a reference previously added by spec_shadow_pin().
-//added/modified by Saharsh B24CS1105
+//added by Saharsh B24CS1105
 int
 spec_shadow_unpin(struct buf *b)
 {
@@ -221,7 +238,7 @@ spec_shadow_unpin(struct buf *b)
 }
 
 // Copy a staged block into the table, updating an existing key if present.
-//added/modified by Saharsh B24CS1105
+//added by Saharsh B24CS1105
 int
 spec_shadow_store(spec_id_t spec, uint dev, uint blockno, const char *data)
 {
@@ -255,7 +272,7 @@ spec_shadow_store(spec_id_t spec, uint dev, uint blockno, const char *data)
 }
 
 // Return 1 and copy the block when found, 0 when the key is absent.
-//added/modified by Saharsh B24CS1105
+//added by Saharsh B24CS1105
 int
 spec_shadow_lookup(spec_id_t spec, uint dev, uint blockno, char *data)
 {
@@ -264,7 +281,7 @@ spec_shadow_lookup(spec_id_t spec, uint dev, uint blockno, char *data)
   if (spec == SPEC_ID_NONE || data == 0)
     return SPEC_ERR_BAD_ID;
 
-  b = spec_shadow_acquire(spec, dev, blockno);
+  b = shadow_acquire(spec, dev, blockno);
   if (b == 0)
     return 0;
   memmove(data, b->data, BSIZE);
@@ -273,7 +290,7 @@ spec_shadow_lookup(spec_id_t spec, uint dev, uint blockno, char *data)
 }
 
 // Count the blocks currently staged by one speculation.
-//added/modified by Saharsh B24CS1105
+//added by Saharsh B24CS1105
 int
 spec_shadow_count(spec_id_t spec)
 {
@@ -292,7 +309,7 @@ spec_shadow_count(spec_id_t spec)
 }
 
 // Copy the indexed block of a speculation for commit-time enumeration.
-//added/modified by Saharsh B24CS1105
+//added by Saharsh B24CS1105
 int
 spec_shadow_get(spec_id_t spec, int index, uint *dev, uint *blockno,
                 char *data)
@@ -329,7 +346,7 @@ spec_shadow_get(spec_id_t spec, int index, uint *dev, uint *blockno,
 }
 
 // Make every entry owned by a speculation available for later reuse.
-//added/modified by Saharsh B24CS1105
+//added by Saharsh B24CS1105
 void
 spec_shadow_discard(spec_id_t spec)
 {

@@ -33,14 +33,14 @@ struct {
 } bcache;
 
 void spec_shadow_init(void);
-struct buf *spec_shadow_acquire(spec_id_t, uint, uint);
+struct buf *spec_shadow_read(uint, uint);
 int spec_shadow_release(struct buf *);
 int spec_shadow_pin(struct buf *);
 int spec_shadow_unpin(struct buf *);
 int spec_shadow_is_buffer(struct buf *);
 
 // Initialize the normal buffer cache and the fixed-size shadow table.
-//added/modified by Saharsh B24CS1105
+//modified by Saharsh B24CS1105
 void
 binit(void)
 {
@@ -99,22 +99,15 @@ bget(uint dev, uint blockno)
 
 // Return a locked buf with the contents of the indicated block.
 // Prefer an active speculation's private block, then use the normal cache.
-//added/modified by Saharsh B24CS1105
+//modified by Saharsh B24CS1105
 struct buf *
 bread(uint dev, uint blockno)
 {
   struct buf *b;
-  spec_id_t spec;
-  enum spec_state state;
 
-  spec = spec_current_id();
-  if (spec != SPEC_ID_NONE &&
-      spec_get_state(spec, &state) == SPEC_OK &&
-      state == SPEC_STATE_ACTIVE) {
-    b = spec_shadow_acquire(spec, dev, blockno);
-    if (b != 0)
-      return b;
-  }
+  b = spec_shadow_read(dev, blockno);
+  if (b != 0)
+    return b;
 
   b = bget(dev, blockno);
   if (!b->valid) {
@@ -127,7 +120,7 @@ bread(uint dev, uint blockno)
 // Write b's contents to disk.  Must be locked.
 // Only the log calls bwrite.
 // Write ordinary buffers to disk; keep shadow buffers private.
-//added/modified by Saharsh B24CS1105
+//modified by Saharsh B24CS1105
 void
 bwrite(struct buf *b)
 {
@@ -141,7 +134,7 @@ bwrite(struct buf *b)
 // Release a locked buffer.
 // Move to the head of the most-recently-used list.
 // Release a shadow buffer or return a normal buffer to the cache LRU.
-//added/modified by Saharsh B24CS1105
+//modified by Saharsh B24CS1105
 void
 brelse(struct buf *b)
 {
@@ -169,7 +162,7 @@ brelse(struct buf *b)
 }
 
 // Keep either kind of buffer referenced across journal operations.
-//added/modified by Saharsh B24CS1105
+//modified by Saharsh B24CS1105
 void
 bpin(struct buf *b)
 {
@@ -182,7 +175,7 @@ bpin(struct buf *b)
 }
 
 // Drop a reference previously added by bpin().
-//added/modified by Saharsh B24CS1105
+//modified by Saharsh B24CS1105
 void
 bunpin(struct buf *b)
 {
