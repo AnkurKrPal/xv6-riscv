@@ -39,8 +39,18 @@ int             spec_join(spec_id_t);
 void            spec_leave(spec_id_t);
 int             spec_op_enter(spec_id_t);
 void            spec_op_leave(spec_id_t);
+spec_id_t       spec_exit_enter(void);
+void            spec_exit_leave(spec_id_t);
 
 // speculative shadow blocks (spec_shadow.c)
+void            spec_shadow_init(void);
+struct buf*     spec_shadow_read(uint, uint);
+struct buf*     spec_shadow_prepare(struct buf*);
+int             spec_shadow_release(struct buf*);
+int             spec_shadow_is_buffer(struct buf*);
+int             spec_shadow_pin(struct buf*);
+int             spec_shadow_unpin(struct buf*);
+int             spec_shadow_lookup(spec_id_t, uint, uint, char*);
 int             spec_shadow_count(spec_id_t);
 int             spec_shadow_get(spec_id_t, int, uint*, uint*, char*);
 int             spec_shadow_store(spec_id_t, uint, uint, const char*);

@@ -18,6 +18,10 @@ struct spinlock pid_lock;
 extern void forkret(void);
 static void freeproc(struct proc *p);
 
+// Exit lifecycle hooks shared with spec_state.c.
+spec_id_t spec_exit_enter(void);
+void spec_exit_leave(spec_id_t);
+
 extern char trampoline[]; // trampoline.S
 
 // helps ensure that wakeups of wait()ing
@@ -160,6 +164,13 @@ found:
 static void
 freeproc(struct proc *p)
 {
+  // Roll back a failed fork's membership reservation.  Exiting processes
+  // already detached in kexit(), so reaping a zombie must not leave twice.
+  if (p->spec != SPEC_ID_NONE) {
+    spec_id_t id = p->spec;
+    p->spec = SPEC_ID_NONE;
+    spec_leave(id);
+  }
   if (p->trapframe)
     kfree((void *)p->trapframe);
   p->trapframe = 0;
@@ -269,19 +280,26 @@ kfork(void)
   struct proc *np;
   struct proc *p = myproc();
 
+  // Reserve the entire fork before taking process locks.  A frozen group
+  // rejects admission, and an admitted fork keeps commit busy until the
+  // child is runnable or its membership has been rolled back.
+  inherited_spec = spec_current_id();
+  if (spec_op_enter(inherited_spec) != SPEC_OK)
+    return -1;
+
   // Allocate process.
   if ((np = allocproc()) == 0) {
+    spec_op_leave(inherited_spec);
     return -1;
   }
 
-  // A child created during speculation joins the same group.  Joining
-  // before copying memory makes it impossible for a commit to start after
-  // the ACTIVE check but before the child is counted as a member.
-  inherited_spec = spec_current_id();
+  // A child created during speculation joins the same group before it can
+  // run.  Membership and operation admission use the same lifecycle lock.
   if (inherited_spec != SPEC_ID_NONE) {
     if (spec_join(inherited_spec) != SPEC_OK) {
       freeproc(np);
       release(&np->lock);
+      spec_op_leave(inherited_spec);
       return -1;
     }
     np->spec = inherited_spec;
@@ -289,12 +307,9 @@ kfork(void)
 
   // Copy user memory from parent to child.
   if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0) {
-    if (np->spec != SPEC_ID_NONE) {
-      spec_leave(np->spec);
-      np->spec = SPEC_ID_NONE;
-    }
     freeproc(np);
     release(&np->lock);
+    spec_op_leave(inherited_spec);
     return -1;
   }
   np->sz = p->sz;
@@ -324,6 +339,7 @@ kfork(void)
   acquire(&np->lock);
   np->state = RUNNABLE;
   release(&np->lock);
+  spec_op_leave(inherited_spec);
 
   return pid;
 }
@@ -350,9 +366,14 @@ void
 kexit(int status)
 {
   struct proc *p = myproc();
+  spec_id_t exiting_spec;
 
   if (p == initproc)
     panic("init exiting");
+
+  // Wait out a commit before touching files or cwd, then pin the group
+  // until all speculative exit work is done.  No process lock is held.
+  exiting_spec = spec_exit_enter();
 
   // Close all open files.
   for (int fd = 0; fd < NOFILE; fd++) {
@@ -368,10 +389,9 @@ kexit(int status)
   end_op();
   p->cwd = 0;
 
-  if (p->spec != SPEC_ID_NONE) {
-    spec_leave(p->spec);
-    p->spec = SPEC_ID_NONE;
-  }
+  // Release the exit reservation and detach before taking process locks
+  // or becoming a zombie.  Reaping must not release membership again.
+  spec_exit_leave(exiting_spec);
 
   acquire(&wait_lock);
 
