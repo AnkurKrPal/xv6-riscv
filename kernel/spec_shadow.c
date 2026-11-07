@@ -158,7 +158,7 @@ spec_shadow_is_buffer(struct buf *b)
 
 // Replace a locked real buffer with a locked private copy for an active spec.
 // On failure, return zero and leave the original buffer locked and unchanged.
-//added by Saharsh B24CS1105
+//modified by Saharsh B24CS1105
 struct buf *
 spec_shadow_prepare(struct buf *b)
 {
@@ -173,7 +173,7 @@ spec_shadow_prepare(struct buf *b)
   if (spec == SPEC_ID_NONE)
     return b;
   if (spec_get_state(spec, &state) != SPEC_OK || state != SPEC_STATE_ACTIVE)
-    return b;
+    return 0;
 
   acquire(&shadow_table.lock);
   entry = shadow_from_buf_locked(b);
