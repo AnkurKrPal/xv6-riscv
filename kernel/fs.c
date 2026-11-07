@@ -51,6 +51,73 @@ fs_log_write(struct buf *bp)
 // only one device
 struct superblock sb;
 
+// Copy the shared in-memory inode fields into a disk-format view.
+//added by Saharsh B24CS1105
+static void
+inode_cache_snapshot(struct inode *ip, struct dinode *view)
+{
+  view->type = ip->type;
+  view->major = ip->major;
+  view->minor = ip->minor;
+  view->nlink = ip->nlink;
+  view->size = ip->size;
+  memmove(view->addrs, ip->addrs, sizeof(view->addrs));
+}
+
+// Update the committed in-memory inode after a non-speculative write.
+//added by Saharsh B24CS1105
+static void
+inode_cache_install(struct inode *ip, const struct dinode *view)
+{
+  ip->type = view->type;
+  ip->major = view->major;
+  ip->minor = view->minor;
+  ip->nlink = view->nlink;
+  ip->size = view->size;
+  memmove(ip->addrs, view->addrs, sizeof(ip->addrs));
+}
+
+// Read the caller's inode metadata view from its selected inode block.
+// Active speculations therefore see their own shadowed metadata only.
+//added by Saharsh B24CS1105
+static void
+inode_view_read(struct inode *ip, struct dinode *view)
+{
+  struct buf *bp;
+  struct dinode *dip;
+
+  bp = bread(ip->dev, IBLOCK(ip->inum, sb));
+  dip = (struct dinode *)bp->data + ip->inum % IPB;
+  memmove(view, dip, sizeof(*view));
+  brelse(bp);
+}
+
+// Store metadata in the caller's selected inode block without publishing a
+// speculative view through the shared in-memory inode cache.
+//added by Saharsh B24CS1105
+static int
+inode_view_write(struct inode *ip, const struct dinode *view)
+{
+  struct buf *bp;
+  struct dinode *dip;
+  int private;
+
+  bp = bread(ip->dev, IBLOCK(ip->inum, sb));
+  if (prepare_write(&bp) < 0) {
+    brelse(bp);
+    return -1;
+  }
+  private = spec_shadow_is_buffer(bp);
+  dip = (struct dinode *)bp->data + ip->inum % IPB;
+  memmove(dip, view, sizeof(*view));
+  fs_log_write(bp);
+  brelse(bp);
+
+  if (!private)
+    inode_cache_install(ip, view);
+  return 0;
+}
+
 // Read the super block.
 static void
 readsb(int dev, struct superblock *sb)
@@ -276,26 +343,14 @@ ialloc(uint dev, short type)
 // Must be called after every change to an ip->xxx field
 // that lives on disk.
 // Caller must hold ip->lock.
+//modified by Saharsh B24CS1105
 void
 iupdate(struct inode *ip)
 {
-  struct buf *bp;
-  struct dinode *dip;
+  struct dinode view;
 
-  bp = bread(ip->dev, IBLOCK(ip->inum, sb));
-  if (prepare_write(&bp) < 0) {
-    brelse(bp);
-    return;
-  }
-  dip = (struct dinode *)bp->data + ip->inum % IPB;
-  dip->type = ip->type;
-  dip->major = ip->major;
-  dip->minor = ip->minor;
-  dip->nlink = ip->nlink;
-  dip->size = ip->size;
-  memmove(dip->addrs, ip->addrs, sizeof(ip->addrs));
-  fs_log_write(bp);
-  brelse(bp);
+  inode_cache_snapshot(ip, &view);
+  inode_view_write(ip, &view);
 }
 
 // Find the inode with number inum on device dev
@@ -346,7 +401,8 @@ idup(struct inode *ip)
 }
 
 // Lock the given inode.
-// Reads the inode from disk if necessary.
+// Reads only committed metadata into the shared cache if necessary.
+//modified by Saharsh B24CS1105
 void
 ilock(struct inode *ip)
 {
@@ -359,7 +415,7 @@ ilock(struct inode *ip)
   acquiresleep(&ip->lock);
 
   if (ip->valid == 0) {
-    bp = bread(ip->dev, IBLOCK(ip->inum, sb));
+    bp = bread_original(ip->dev, IBLOCK(ip->inum, sb));
     dip = (struct dinode *)bp->data + ip->inum % IPB;
     ip->type = dip->type;
     ip->major = dip->major;
@@ -476,21 +532,24 @@ ireclaim(int dev)
 // are listed in ip->addrs[].  The next NINDIRECT blocks are
 // listed in block ip->addrs[NDIRECT].
 
-// Return the disk block address of the nth block in inode ip.
-// If there is no such block, bmap allocates one.
-// returns 0 if out of disk space.
+// Return the nth data block from the caller's metadata view.
+// Allocate a missing block only when alloc is nonzero.
+// Returns 0 for a missing read block or if allocation fails.
+//modified by Saharsh B24CS1105
 static uint
-bmap(struct inode *ip, uint bn)
+bmap(struct inode *ip, struct dinode *view, uint bn, int alloc)
 {
   uint addr, *a;
   struct buf *bp;
 
   if (bn < NDIRECT) {
-    if ((addr = ip->addrs[bn]) == 0) {
+    if ((addr = view->addrs[bn]) == 0) {
+      if (!alloc)
+        return 0;
       addr = balloc(ip->dev);
       if (addr == 0)
         return 0;
-      ip->addrs[bn] = addr;
+      view->addrs[bn] = addr;
     }
     return addr;
   }
@@ -498,15 +557,21 @@ bmap(struct inode *ip, uint bn)
 
   if (bn < NINDIRECT) {
     // Load indirect block, allocating if necessary.
-    if ((addr = ip->addrs[NDIRECT]) == 0) {
+    if ((addr = view->addrs[NDIRECT]) == 0) {
+      if (!alloc)
+        return 0;
       addr = balloc(ip->dev);
       if (addr == 0)
         return 0;
-      ip->addrs[NDIRECT] = addr;
+      view->addrs[NDIRECT] = addr;
     }
     bp = bread(ip->dev, addr);
     a = (uint *)bp->data;
     if ((addr = a[bn]) == 0) {
+      if (!alloc) {
+        brelse(bp);
+        return 0;
+      }
       addr = balloc(ip->dev);
       if (addr) {
         if (prepare_write(&bp) < 0) {
@@ -531,46 +596,53 @@ bmap(struct inode *ip, uint bn)
 
 // Truncate inode (discard contents).
 // Caller must hold ip->lock.
+//modified by Saharsh B24CS1105
 void
 itrunc(struct inode *ip)
 {
   int i, j;
   struct buf *bp;
+  struct dinode view;
   uint *a;
 
+  inode_view_read(ip, &view);
   for (i = 0; i < NDIRECT; i++) {
-    if (ip->addrs[i]) {
-      bfree(ip->dev, ip->addrs[i]);
-      ip->addrs[i] = 0;
+    if (view.addrs[i]) {
+      bfree(ip->dev, view.addrs[i]);
+      view.addrs[i] = 0;
     }
   }
 
-  if (ip->addrs[NDIRECT]) {
-    bp = bread(ip->dev, ip->addrs[NDIRECT]);
+  if (view.addrs[NDIRECT]) {
+    bp = bread(ip->dev, view.addrs[NDIRECT]);
     a = (uint *)bp->data;
     for (j = 0; j < NINDIRECT; j++) {
       if (a[j])
         bfree(ip->dev, a[j]);
     }
     brelse(bp);
-    bfree(ip->dev, ip->addrs[NDIRECT]);
-    ip->addrs[NDIRECT] = 0;
+    bfree(ip->dev, view.addrs[NDIRECT]);
+    view.addrs[NDIRECT] = 0;
   }
 
-  ip->size = 0;
-  iupdate(ip);
+  view.size = 0;
+  inode_view_write(ip, &view);
 }
 
 // Copy stat information from inode.
 // Caller must hold ip->lock.
+//modified by Saharsh B24CS1105
 void
 stati(struct inode *ip, struct stat *st)
 {
+  struct dinode view;
+
+  inode_view_read(ip, &view);
   st->dev = ip->dev;
   st->ino = ip->inum;
-  st->type = ip->type;
-  st->nlink = ip->nlink;
-  st->size = ip->size;
+  st->type = view.type;
+  st->nlink = view.nlink;
+  st->size = view.size;
 }
 
 // Read data from inode.
@@ -583,14 +655,16 @@ readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
 {
   uint tot, m;
   struct buf *bp;
+  struct dinode view;
 
-  if (off > ip->size || off + n < off)
+  inode_view_read(ip, &view);
+  if (off > view.size || off + n < off)
     return 0;
-  if (off + n > ip->size)
-    n = ip->size - off;
+  if (off + n > view.size)
+    n = view.size - off;
 
   for (tot = 0; tot < n; tot += m, off += m, dst += m) {
-    uint addr = bmap(ip, off / BSIZE);
+    uint addr = bmap(ip, &view, off / BSIZE, 0);
     if (addr == 0)
       break;
     // bread returns only this caller's shadow; outsiders read the real block.
@@ -613,19 +687,22 @@ readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
 // Returns the number of bytes successfully written.
 // If the return value is less than the requested n,
 // there was an error of some kind.
+//modified by Saharsh B24CS1105
 int
 writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
 {
   uint tot, m;
   struct buf *bp;
+  struct dinode view;
 
-  if (off > ip->size || off + n < off)
+  inode_view_read(ip, &view);
+  if (off > view.size || off + n < off)
     return -1;
   if (off + n > MAXFILE * BSIZE)
     return -1;
 
   for (tot = 0; tot < n; tot += m, off += m, src += m) {
-    uint addr = bmap(ip, off / BSIZE);
+    uint addr = bmap(ip, &view, off / BSIZE, 1);
     if (addr == 0)
       break;
     bp = bread(ip->dev, addr);
@@ -644,13 +721,14 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
     brelse(bp);
   }
 
-  if (off > ip->size)
-    ip->size = off;
+  if (off > view.size)
+    view.size = off;
 
   // write the i-node back to disk even if the size didn't change
   // because the loop above might have called bmap() and added a new
-  // block to ip->addrs[].
-  iupdate(ip);
+  // block to the caller's private address view.
+  if (inode_view_write(ip, &view) < 0)
+    return -1;
 
   return tot;
 }
@@ -665,16 +743,19 @@ namecmp(const char *s, const char *t)
 
 // Look for a directory entry in a directory.
 // If found, set *poff to byte offset of entry.
+//modified by Saharsh B24CS1105
 struct inode *
 dirlookup(struct inode *dp, char *name, uint *poff)
 {
   uint off, inum;
   struct dirent de;
+  struct dinode view;
 
   if (dp->type != T_DIR)
     panic("dirlookup not DIR");
 
-  for (off = 0; off < dp->size; off += sizeof(de)) {
+  inode_view_read(dp, &view);
+  for (off = 0; off < view.size; off += sizeof(de)) {
     if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
       panic("dirlookup read");
     if (de.inum == 0)
@@ -693,11 +774,13 @@ dirlookup(struct inode *dp, char *name, uint *poff)
 
 // Write a new directory entry (name, inum) into the directory dp.
 // Returns 0 on success, -1 on failure (e.g. out of disk blocks).
+//modified by Saharsh B24CS1105
 int
 dirlink(struct inode *dp, char *name, uint inum)
 {
   int off;
   struct dirent de;
+  struct dinode view;
   struct inode *ip;
 
   // Check that name is not present.
@@ -707,7 +790,8 @@ dirlink(struct inode *dp, char *name, uint inum)
   }
 
   // Look for an empty dirent.
-  for (off = 0; off < dp->size; off += sizeof(de)) {
+  inode_view_read(dp, &view);
+  for (off = 0; off < view.size; off += sizeof(de)) {
     if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
       panic("dirlink read");
     if (de.inum == 0)

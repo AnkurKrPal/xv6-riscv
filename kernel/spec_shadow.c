@@ -17,6 +17,24 @@ struct shadow {
   struct buf buf;
 };
 
+// Clear one idle shadow while preserving its initialized sleep lock.
+// Caller must hold shadow_table.lock.
+//added by Saharsh B24CS1105
+static void
+shadow_reset_locked(struct shadow *entry)
+{
+  if (entry->buf.refcnt != 0)
+    panic("shadow discard busy");
+
+  entry->spec = SPEC_ID_NONE;
+  entry->normal_writes = 0;
+  entry->buf.valid = 0;
+  entry->buf.disk = 0;
+  entry->buf.dev = 0;
+  entry->buf.blockno = 0;
+  memset(entry->buf.data, 0, BSIZE);
+}
+
 static struct {
   struct spinlock lock;
   struct shadow entries[NSHADOW];
@@ -387,8 +405,8 @@ spec_shadow_get(spec_id_t spec, int index, uint *dev, uint *blockno,
   return SPEC_OK;
 }
 
-// Make every entry owned by a speculation available for later reuse.
-//added by Saharsh B24CS1105
+// Erase every private block and its metadata after the group is quiescent.
+//modified by Saharsh B24CS1105
 void
 spec_shadow_discard(spec_id_t spec)
 {
@@ -399,7 +417,7 @@ spec_shadow_discard(spec_id_t spec)
   for (int i = 0; i < NSHADOW; i++) {
     struct shadow *entry = &shadow_table.entries[i];
     if (entry->spec == spec)
-      entry->spec = SPEC_ID_NONE;
+      shadow_reset_locked(entry);
   }
   release(&shadow_table.lock);
 }

@@ -97,6 +97,21 @@ bget(uint dev, uint blockno)
   panic("bget: no buffers");
 }
 
+// Return a locked committed buffer without consulting speculative shadows.
+//added by Saharsh B24CS1105
+struct buf *
+bread_original(uint dev, uint blockno)
+{
+  struct buf *b;
+
+  b = bget(dev, blockno);
+  if (!b->valid) {
+    virtio_disk_rw(b, 0);
+    b->valid = 1;
+  }
+  return b;
+}
+
 // Return a locked buf with the contents of the indicated block.
 // Prefer an active speculation's private block, then use the normal cache.
 //modified by Saharsh B24CS1105
@@ -108,13 +123,7 @@ bread(uint dev, uint blockno)
   b = spec_shadow_read(dev, blockno);
   if (b != 0)
     return b;
-
-  b = bget(dev, blockno);
-  if (!b->valid) {
-    virtio_disk_rw(b, 0);
-    b->valid = 1;
-  }
-  return b;
+  return bread_original(dev, blockno);
 }
 
 // Write b's contents to disk.  Must be locked.
