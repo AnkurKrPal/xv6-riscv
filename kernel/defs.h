@@ -51,6 +51,8 @@ int             spec_shadow_is_buffer(struct buf*);
 int             spec_shadow_pin(struct buf*);
 int             spec_shadow_unpin(struct buf*);
 int             spec_shadow_lookup(spec_id_t, uint, uint, char*);
+void            spec_shadow_note_normal_write(uint, uint);
+int             spec_shadow_get_write_count(spec_id_t, uint, uint, uint*);
 int             spec_shadow_count(spec_id_t);
 int             spec_shadow_get(spec_id_t, int, uint*, uint*, char*);
 int             spec_shadow_store(spec_id_t, uint, uint, const char*);

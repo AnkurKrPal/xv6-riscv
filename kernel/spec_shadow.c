@@ -13,6 +13,7 @@
 
 struct shadow {
   spec_id_t spec;
+  uint normal_writes;
   struct buf buf;
 };
 
@@ -45,6 +46,7 @@ shadow_alloc_locked(uint dev, uint blockno)
   for (int i = 0; i < NSHADOW; i++) {
     struct shadow *entry = &shadow_table.entries[i];
     if (entry->spec == SPEC_ID_NONE && entry->buf.refcnt == 0) {
+      entry->normal_writes = 0;
       entry->buf.valid = 1;
       entry->buf.disk = 0;
       entry->buf.dev = dev;
@@ -116,6 +118,46 @@ spec_shadow_read(uint dev, uint blockno)
   if (spec_get_state(spec, &state) != SPEC_OK || state != SPEC_STATE_ACTIVE)
     return 0;
   return shadow_acquire(spec, dev, blockno);
+}
+
+// Record a real block publication for every other speculation shadowing it.
+// Saturation preserves conflict evidence if a block is written repeatedly.
+//added by Saharsh B24CS1105
+void
+spec_shadow_note_normal_write(uint dev, uint blockno)
+{
+  spec_id_t writer = spec_current_id();
+
+  acquire(&shadow_table.lock);
+  for (int i = 0; i < NSHADOW; i++) {
+    struct shadow *entry = &shadow_table.entries[i];
+    if (entry->spec == SPEC_ID_NONE || entry->spec == writer ||
+        entry->buf.dev != dev || entry->buf.blockno != blockno)
+      continue;
+    if (entry->normal_writes != ~0U)
+      entry->normal_writes++;
+  }
+  release(&shadow_table.lock);
+}
+
+// Return the number of overlapping real writes observed by one shadow block.
+// The commit coordinator decides whether a nonzero count is a conflict.
+//added by Saharsh B24CS1105
+int
+spec_shadow_get_write_count(spec_id_t spec, uint dev, uint blockno,
+                            uint *writes)
+{
+  struct shadow *entry;
+
+  if (spec == SPEC_ID_NONE || writes == 0)
+    return SPEC_ERR_BAD_ID;
+
+  acquire(&shadow_table.lock);
+  entry = shadow_find_locked(spec, dev, blockno);
+  if (entry != 0)
+    *writes = entry->normal_writes;
+  release(&shadow_table.lock);
+  return entry == 0 ? SPEC_ERR_NO_SLOT : SPEC_OK;
 }
 
 // Unlock and drop a shadow-buffer reference; return zero for normal buffers.

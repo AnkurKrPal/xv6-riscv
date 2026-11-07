@@ -128,6 +128,7 @@ bwrite(struct buf *b)
     panic("bwrite");
   if (spec_shadow_is_buffer(b))
     return;
+  spec_shadow_note_normal_write(b->dev, b->blockno);
   virtio_disk_rw(b, 1);
 }
 
