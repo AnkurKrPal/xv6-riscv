@@ -156,9 +156,10 @@ UPROGS=\
 	$U/_dorphan\
 	$U/_sync\
 	$U/_spectest_proc\
+	$U/_agentd\
 
-fs.img: mkfs/mkfs README $(UPROGS)
-	mkfs/mkfs fs.img README $(UPROGS)
+fs.img: mkfs/mkfs README demo/demoFile.txt $(UPROGS)
+	mkfs/mkfs fs.img README demo/demoFile.txt $(UPROGS)
 
 -include kernel/*.d user/*.d
 

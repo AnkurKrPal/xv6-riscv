@@ -1,0 +1,1 @@
+This file is read from the xv6 filesystem by the host agent.
