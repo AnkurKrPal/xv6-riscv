@@ -1,0 +1,27 @@
+
+xv6 kernel is booting
+
+test
+spec_output: steps 5 & 6 (L4 flush/discard & L9 safe failure) PASSED
+pipe: steps 7, 8, 9, 10 (L5, L6, L7, L10 pipe isolation and flush) PASSED
+hart 2 starting
+hart 1 starting
+init: starting sh
+$ speccommit
+spectest_commit: snapshot publication OK
+spectest_commit: oversize leaves real blocks unchanged OK
+spectest_commit: buffer cache capacity boundary OK
+spectest_commit: overlap rejects all blocks and output OK
+spectest_commit: publication conflicts with another owner OK
+spectest_commit: freeze waits for sole member OK
+spectest_commit: ALL TESTS PASSEDspectest_pr
+oc
+$ spectest_proc: invalid transitions OK
+spectest_proc: fork then commit OK
+spectest_proc: fork then abort OK
+spectest_proc: fork before begin OK
+spectest_proc: parent exits first OK
+spectest_proc: reuse after finish OK
+spectest_proc: reuse after exit OK
+spectest_proc: failed fork cleanup OK
+spectest_proc: ALL TESTS PASSED

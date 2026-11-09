@@ -6,6 +6,7 @@
 #include "sleeplock.h"
 #include "fs.h"
 #include "buf.h"
+#include "spec_commit.h"
 
 // Simple logging that allows concurrent FS system calls.
 //
@@ -45,6 +46,7 @@ struct log {
   int dev;
   int ncommit;
   int spec_committing;
+  int spec_capacity; // On-disk payload and buffer-cache bound.
   struct logheader lh;
 };
 struct log log;
@@ -55,7 +57,7 @@ static void commit();
 static int
 reserve_spec_log(int blocks)
 {
-  if (blocks < 0 || blocks > LOGBLOCKS)
+  if (blocks < 0 || blocks > log.spec_capacity)
     return SPEC_ERR_NO_SPACE;
 
   acquire(&log.lock);
@@ -94,6 +96,13 @@ initlog(int dev, struct superblock *sb)
   initlock(&log.lock, "log");
   log.start = sb->logstart;
   log.dev = dev;
+  log.spec_capacity = LOGBLOCKS;
+  if (sb->nlog < 1)
+    panic("initlog: no header");
+  if (sb->nlog - 1 < (uint)log.spec_capacity)
+    log.spec_capacity = sb->nlog - 1;
+  if (log.spec_capacity >= NBUF)
+    log.spec_capacity = NBUF - 1;
   recover_from_log();
 }
 
@@ -277,6 +286,14 @@ log_write(struct buf *b)
   if (log.outstanding < 1)
     panic("log_write outside of trans");
 
+  // Record ordinary cache publications as well as S7's physical bwrite()
+  // notifications. The last end_op() can belong to an ACTIVE speculation
+  // even when another process supplied the ordinary journal writes; relying
+  // solely on that flusher's ID would miss conflicts against its own shadows.
+  // Counts are saturating conflict witnesses, not exact syscall totals.
+  if (!log.spec_committing)
+    spec_shadow_note_normal_write(b->dev, b->blockno);
+
   for (i = 0; i < log.lh.n; i++) {
     if (log.lh.block[i] == b->blockno) // log absorption
       break;
@@ -290,57 +307,55 @@ log_write(struct buf *b)
 }
 
 /*
- * Publish one complete speculative write set. The caller must have moved the
- * speculation to COMMITTING, so bread() returns real cache buffers here.
+ * The coordinator supplies a complete frozen snapshot. Reserve exclusive
+ * journal ownership before consulting S7's counters: earlier ordinary writes
+ * (and other speculative commits) must have reached bwrite() by this point.
+ * Keep ownership through disk commit so no new writer can invalidate checks.
  */
 int
-spec_fs_commit(spec_id_t spec)
+spec_log_publish(spec_id_t spec, const struct spec_commit_block *blocks,
+                 int count)
 {
-  int count, i;
-  int result = SPEC_OK;
-  int blocks[LOGBLOCKS];
-  int nblocks = 0;
+  const struct spec_commit_block *b, *previous;
   enum spec_state state;
+  int result, actual = 0;
 
-  if (spec == SPEC_ID_NONE ||
+  if (spec_current_id() != spec || spec == SPEC_ID_NONE ||
       spec_get_state(spec, &state) != SPEC_OK ||
       state != SPEC_STATE_COMMITTING)
     return SPEC_ERR_BAD_ID;
-  count = spec_shadow_count(spec);
-  if (reserve_spec_log(count) != SPEC_OK)
-    return SPEC_ERR_NO_SPACE;
 
-  for (i = 0; i < count; i++) {
-    uint dev, blockno;
-    char data[BSIZE];
-    struct buf *bp;
-
-    if (spec_shadow_get(spec, i, &dev, &blockno, data) != SPEC_OK) {
-      result = SPEC_ERR_COMMIT;
-      break;
+  // Reject unsupported devices and malformed snapshots before any mutation.
+  // The physical redo log stores block numbers for its one device only.
+  for (b = blocks; b != 0; b = b->next) {
+    if (++actual > log.spec_capacity)
+      return SPEC_ERR_NO_SPACE;
+    if (b->dev != (uint)log.dev)
+      return SPEC_ERR_COMMIT;
+    for (previous = blocks; previous != b; previous = previous->next) {
+      if (previous->blockno == b->blockno)
+        return SPEC_ERR_COMMIT;
     }
-    bp = bread(dev, blockno);
-    memmove(bp->data, data, BSIZE);
-    log_write(bp);
-    brelse(bp);
   }
+  if (actual != count)
+    return SPEC_ERR_COMMIT;
 
+  result = reserve_spec_log(count);
+  if (result != SPEC_OK)
+    return result;
+
+  result = spec_conflict_check(spec, blocks);
   if (result == SPEC_OK) {
-    commit();
-  } else {
-    acquire(&log.lock);
-    nblocks = log.lh.n;
-    for (i = 0; i < nblocks; i++)
-      blocks[i] = log.lh.block[i];
-    log.lh.n = 0;
-    release(&log.lock);
-    for (i = 0; i < nblocks; i++) {
-      struct buf *bp = bread(log.dev, blocks[i]);
-      bunpin(bp);
+    // No recoverable failures remain once the first real buffer changes.
+    // S7's bwrite hook skips this owner but marks other overlapping owners.
+    for (b = blocks; b != 0; b = b->next) {
+      struct buf *bp = bread_original(b->dev, b->blockno);
+      memmove(bp->data, b->data, BSIZE);
+      log_write(bp);
       brelse(bp);
     }
+    commit(); // Synchronous: durable before the coordinator releases output.
   }
-
   release_spec_log();
   return result;
 }

@@ -15,6 +15,7 @@ OBJS = \
   $K/proc.o \
   $K/spec_state.o \
   $K/spec_commit.o \
+  $K/spec_conflict.o \
   $K/spec_shadow.o \
   $K/spec_output.o \
   $K/swtch.o \
@@ -156,6 +157,7 @@ UPROGS=\
 	$U/_dorphan\
 	$U/_sync\
 	$U/_spectest_proc\
+	$U/_speccommit\
 	$U/_agentd\
 
 fs.img: mkfs/mkfs README demo/demoFile.txt $(UPROGS)
