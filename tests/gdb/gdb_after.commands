@@ -1,0 +1,11 @@
+break /Users/prajwal/Desktop/Programming/Projects/OS_Project/xv6-riscv/kernel/spec_commit.c:39 if count >= 30
+echo DEBUGGER_READY\n
+continue
+echo FIX: reject before cache or journal mutation\n
+print count
+print log.lh.n
+print log.spec_committing
+bt
+finish
+print (int)$a0
+detach

@@ -81,7 +81,7 @@ The runner uses separate temporary image copies, runs QEMU with CPUS=1 and
 CPUS=3, and preserves raw guest output in `spec_commit_cpus1.log` and
 `spec_commit_cpus3.log`. Both runs passed:
 
-- Six P3 cases: private multi-block snapshot and successful/empty commits;
+- P3 cases: private multi-block snapshot and successful/empty commits;
   oversized rejection with original data intact; 29-block success/30-block
   rejection at the cache boundary; ordinary overlapping writer causes conflict
   with all real blocks and outward output preserved/discarded as appropriate;
@@ -188,5 +188,10 @@ The runner rejected it with `STAT_RETURNED escaped before durable commit`.
 `CACHE_PARTIAL` and `CACHE_READY`. No production source/object was replaced.
 This confirms the targeted regression detects S10's cache-visibility window.
 
-Reboot after completed publication is verified. Crash injection mid-commit,
-GDB evidence, and exhaustive SMP race exploration have not been performed.
+R12–R14 now add explicit journal ownership checks, the owned source
+`user/spectest_commit.c` (still linked as `speccommit`), a metadata commit/abort
+case, and queued-output verification on capacity failure. Actual interrupted
+commit/recovery runs and GNU GDB failure/fix evidence have also been captured.
+See [commit_crash_notes.md](commit_crash_notes.md) for the 18-case crash matrix,
+reproduction commands, debugger provenance and raw-log index. Exhaustive SMP
+scheduler exploration and torn-sector/power-loss testing are not claimed.

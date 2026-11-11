@@ -1,0 +1,4 @@
+spec_commit_checkpoint (phase=phase@entry=2, progress=progress@entry=4) at kernel/log.c:70
+70	    while (spec_crash_target == phase)
+owner=1 outstanding=1 journal=0 readers=0
+[Inferior 1 (process 1) detached]

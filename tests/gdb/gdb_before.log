@@ -1,0 +1,41 @@
+s_sstatus (x=2) at kernel/riscv.h:67
+67	  __asm__ __volatile__("csrs sstatus, %0" ::"rK"(x) : "memory");
++break panic
+Breakpoint 1 at 0x80000856: file kernel/printk.c, line 139.
++echo DEBUGGER_READY\n
+DEBUGGER_READY
++continue
+
+Breakpoint 1, panic (s=s@entry=0x8000a6f8 "bget: no buffers") at kernel/printk.c:139
+139	{
++echo HISTORICAL FAILURE: original kernel, no fault injection\n
+HISTORICAL FAILURE: original kernel, no fault injection
++print s
+$1 = 0x8000a6f8 "bget: no buffers"
++bt
+#0  panic (s=s@entry=0x8000a6f8 "bget: no buffers") at kernel/printk.c:139
+#1  0x00000000800047f2 in bget (dev=1, blockno=3) at kernel/bio.c:97
+#2  bread_original (dev=dev@entry=1, blockno=blockno@entry=3) at kernel/bio.c:107
+#3  0x0000000080004862 in bread (dev=1, blockno=3) at kernel/bio.c:126
+#4  0x0000000080005c1e in write_log () at kernel/log.c:227
+#5  commit () at kernel/log.c:240
+#6  0x0000000080006072 in spec_fs_commit (spec=spec@entry=2) at kernel/log.c:329
+#7  0x0000000080002c9a in spec_commit_transaction () at kernel/spec_commit.c:30
+#8  0x0000000080002988 in spec_commit () at kernel/spec_state.c:338
+#9  0x00000000800046bc in sys_xcommit () at kernel/sysproc.c:123
+#10 0x0000000080004474 in syscall () at kernel/syscall.c:152
+#11 0x00000000800041fe in usertrap () at kernel/trap.c:68
+#12 0x0000003ffffff09c in ?? ()
++print log.lh.n
+$2 = 30
++print log.outstanding
+$3 = 1
++print log.spec_committing
+$4 = 1
++print sizeof(bcache.buf) / sizeof(bcache.buf[0])
+$5 = 30
++set $pinned = (bcache.buf[0].refcnt > 0) + (bcache.buf[1].refcnt > 0) + (bcache.buf[2].refcnt > 0) + (bcache.buf[3].refcnt > 0) + (bcache.buf[4].refcnt > 0) + (bcache.buf[5].refcnt > 0) + (bcache.buf[6].refcnt > 0) + (bcache.buf[7].refcnt > 0) + (bcache.buf[8].refcnt > 0) + (bcache.buf[9].refcnt > 0) + (bcache.buf[10].refcnt > 0) + (bcache.buf[11].refcnt > 0) + (bcache.buf[12].refcnt > 0) + (bcache.buf[13].refcnt > 0) + (bcache.buf[14].refcnt > 0) + (bcache.buf[15].refcnt > 0) + (bcache.buf[16].refcnt > 0) + (bcache.buf[17].refcnt > 0) + (bcache.buf[18].refcnt > 0) + (bcache.buf[19].refcnt > 0) + (bcache.buf[20].refcnt > 0) + (bcache.buf[21].refcnt > 0) + (bcache.buf[22].refcnt > 0) + (bcache.buf[23].refcnt > 0) + (bcache.buf[24].refcnt > 0) + (bcache.buf[25].refcnt > 0) + (bcache.buf[26].refcnt > 0) + (bcache.buf[27].refcnt > 0) + (bcache.buf[28].refcnt > 0) + (bcache.buf[29].refcnt > 0)
++print $pinned
+$6 = 30
++detach
+[Inferior 1 (process 1) detached]

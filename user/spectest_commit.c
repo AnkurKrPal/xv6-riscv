@@ -66,18 +66,33 @@ publish(void)
 static void
 capacity(void)
 {
-  // Existing blocks avoid involving speculative allocation in this test.
+  // The ordinary supervisor must receive EOF, never the queued output, when
+  // the oversized child's commit is rejected. No scheduling delay is needed.
+  int outward[2], status;
+  char token;
   prepare(LOGBLOCKS + 2);
-  CHECK(xbegin() == SPEC_OK, 30);
-  int fd = open(path, O_WRONLY);
-  CHECK(fd >= 0, 31);
-  fill(fd, LOGBLOCKS + 2, 'P');
-  close(fd);
-  CHECK(xcommit() == SPEC_ERR_NO_SPACE, 32);
+  CHECK(pipe(outward) == 0, 30);
+  int child = fork();
+  CHECK(child >= 0, 31);
+  if (child == 0) {
+    close(outward[0]);
+    CHECK(xbegin() == SPEC_OK, 32);
+    int fd = open(path, O_WRONLY);
+    CHECK(fd >= 0, 33);
+    fill(fd, LOGBLOCKS + 2, 'P');
+    close(fd);
+    CHECK(write(outward[1], "X", 1) == 1, 34);
+    CHECK(xcommit() == SPEC_ERR_NO_SPACE, 35);
+    CHECK(xabort() == SPEC_ERR_NO_ACTIVE, 36);
+    CHECK(xbegin() == SPEC_OK && xcommit() == SPEC_OK, 37);
+    close(outward[1]);
+    exit(0);
+  }
+  close(outward[1]);
+  CHECK(read(outward[0], &token, 1) == 0, 38);
+  close(outward[0]);
+  CHECK(wait(&status) == child && status == 0, 39);
   verify(LOGBLOCKS + 2, 'O', 0);
-  CHECK(xabort() == SPEC_ERR_NO_ACTIVE, 33);
-  CHECK(xbegin() == SPEC_OK, 34);
-  CHECK(xcommit() == SPEC_OK, 35);
   unlink(path);
 }
 
@@ -347,6 +362,167 @@ publication_visibility(void)
   CHECK(write(1, "pub: VISIBILITY PASSED\n", 23) == 23, 135);
 }
 
+static void
+metadata_atomicity(void)
+{
+  const char *dead = "commit-dead", *linked = "commit-link";
+  const char *directory = "commit-dir";
+  struct stat st, other;
+  prepare(3);
+  unlink(added_path);
+  unlink(linked);
+  unlink(directory);
+  unlink(dead);
+  int fd = open(dead, O_CREATE | O_WRONLY);
+  CHECK(fd >= 0 && write(fd, "old", 3) == 3, 140);
+  close(fd);
+  for (int commit = 0; commit < 2; commit++) {
+    CHECK(xbegin() == SPEC_OK, 141);
+    fd = open(path, O_WRONLY | O_TRUNC);
+    CHECK(fd >= 0, 142);
+    fill(fd, 5, 'P');
+    close(fd);
+    fd = open(added_path, O_CREATE | O_WRONLY);
+    CHECK(fd >= 0 && write(fd, "metadata", 8) == 8, 143);
+    close(fd);
+    CHECK(link(added_path, linked) == 0 && mkdir(directory) == 0, 144);
+    CHECK(unlink(dead) == 0, 145);
+    CHECK((commit ? xcommit() : xabort()) == SPEC_OK, 146);
+    if (commit) {
+      verify_publication();
+      CHECK(stat(added_path, &st) == 0 && st.nlink == 2, 147);
+      CHECK(stat(linked, &other) == 0 && st.ino == other.ino, 148);
+      CHECK(stat(directory, &st) == 0 && st.type == T_DIR, 149);
+      CHECK(stat(dead, &st) == -1, 150);
+    } else {
+      verify(3, 'O', 0);
+      CHECK(stat(dead, &st) == 0 && st.size == 3, 151);
+      CHECK(stat(added_path, &st) == -1 && stat(linked, &st) == -1, 152);
+      CHECK(stat(directory, &st) == -1, 153);
+    }
+  }
+  unlink(path);
+  unlink(linked);
+  unlink(added_path);
+  unlink(directory);
+}
+
+// The host parks the committer after conflict validation, then starts a
+// normal writer. Reservation must keep that writer out until publication ends.
+static void
+check_publish_race(void)
+{
+  int gate[2], done[2], status;
+  char token;
+  prepare(3);
+  CHECK(pipe(gate) == 0 && pipe(done) == 0, 180);
+  int fd = open(path, O_WRONLY);
+  CHECK(fd >= 0, 181);
+  int writer = fork();
+  CHECK(writer >= 0, 182);
+  if (writer == 0) {
+    close(gate[1]);
+    close(done[0]);
+    close(done[1]);
+    CHECK(read(gate[0], &token, 1) == 1, 183);
+    CHECK(write(1, "race: WRITER ATTEMPT\n", 21) == 21, 184);
+    fill(fd, 3, 'W');
+    close(fd);
+    sync();
+    CHECK(write(1, "race: WRITER FINISHED\n", 22) == 22, 185);
+    exit(0);
+  }
+  close(fd);
+  int committer = fork();
+  CHECK(committer >= 0, 186);
+  if (committer == 0) {
+    close(gate[0]);
+    close(gate[1]);
+    close(done[0]);
+    CHECK(xbegin() == SPEC_OK, 187);
+    fd = open(path, O_WRONLY);
+    CHECK(fd >= 0, 188);
+    fill(fd, 3, 'P');
+    close(fd);
+    CHECK(write(1, "race: BUFFERED OUTPUT\n", 22) == 22, 189);
+    CHECK(write(done[1], "C", 1) == 1, 190);
+    CHECK(xcommit() == SPEC_OK, 191);
+    CHECK(write(1, "race: COMMIT RETURNED\n", 22) == 22, 192);
+    exit(0);
+  }
+  close(gate[0]);
+  close(done[1]);
+  CHECK(read(0, &token, 1) == 1 && token == 'G', 193);
+  CHECK(read(0, &token, 1) == 1 && token == '\n', 194);
+  CHECK(write(gate[1], "W", 1) == 1, 195);
+  close(gate[1]);
+  CHECK(read(done[0], &token, 1) == 1 && token == 'C', 196);
+  close(done[0]);
+  for (int i = 0; i < 2; i++)
+    CHECK(wait(&status) > 0 && status == 0, 197);
+  verify(3, 'W', 0);
+  unlink(path);
+  CHECK(write(1, "race: CHECK PUBLISH VERIFIED\n", 29) == 29, 198);
+}
+
+// Crash tests have a durable baseline and change data, inode size, directory
+// entries, links and allocation metadata in the same speculative transaction.
+static void
+crash_workload(void)
+{
+  prepare(3);
+  unlink(added_path);
+  unlink("commit-link");
+  unlink("commit-dir");
+  unlink("commit-dead");
+  int fd = open("commit-dead", O_CREATE | O_WRONLY);
+  CHECK(fd >= 0 && write(fd, "old", 3) == 3, 154);
+  close(fd);
+  sync();
+  CHECK(write(1, "crash: BASELINE READY\n", 22) == 22, 155);
+  CHECK(xbegin() == SPEC_OK, 156);
+  fd = open(path, O_WRONLY | O_TRUNC);
+  CHECK(fd >= 0, 157);
+  fill(fd, 5, 'P');
+  close(fd);
+  fd = open(added_path, O_CREATE | O_WRONLY);
+  CHECK(fd >= 0 && write(fd, "metadata", 8) == 8, 158);
+  close(fd);
+  CHECK(link(added_path, "commit-link") == 0, 159);
+  CHECK(mkdir("commit-dir") == 0 && unlink("commit-dead") == 0, 160);
+  CHECK(write(1, "crash: OUTPUT RELEASED\n", 23) == 23, 161);
+  CHECK(xcommit() == SPEC_OK, 162);
+  CHECK(write(1, "crash: COMMIT RETURNED\n", 23) == 23, 163);
+}
+
+static void
+recover_verify(int committed)
+{
+  struct stat st, other;
+  if (committed) {
+    verify_publication();
+    CHECK(stat(added_path, &st) == 0 && st.nlink == 2, 164);
+    CHECK(stat("commit-link", &other) == 0 && st.ino == other.ino, 165);
+    CHECK(stat("commit-dir", &st) == 0 && st.type == T_DIR, 166);
+    CHECK(stat("commit-dead", &st) == -1, 167);
+  } else {
+    verify(3, 'O', 0);
+    CHECK(stat(added_path, &st) == -1 && stat("commit-link", &st) == -1, 168);
+    CHECK(stat("commit-dir", &st) == -1, 169);
+    int fd = open("commit-dead", O_RDONLY);
+    CHECK(fd >= 0 && read(fd, block, 3) == 3 && memcmp(block, "old", 3) == 0, 170);
+    close(fd);
+  }
+  // Exercise the recovered allocation bitmap and journal after verification.
+  int fd = open("commit-probe", O_CREATE | O_WRONLY);
+  CHECK(fd >= 0, 171);
+  fill(fd, 2, 'Z');
+  close(fd);
+  CHECK(unlink("commit-probe") == 0, 172);
+  sync();
+  CHECK(write(1, "crash: RECOVERY VERIFIED\n", 25) == 25, 173);
+}
+
 static int
 run(const char *name, void (*test)(void))
 {
@@ -366,6 +542,24 @@ run(const char *name, void (*test)(void))
 int
 main(int argc, char **argv)
 {
+  if (argc == 2 && strcmp(argv[1], "race") == 0) {
+    check_publish_race();
+    exit(0);
+  }
+  if (argc == 2 && strcmp(argv[1], "capacity-gdb") == 0) {
+    cache_limit();
+    printf("gdb: CAPACITY FIX VERIFIED\n");
+    exit(0);
+  }
+  if (argc == 2 && strcmp(argv[1], "crash") == 0) {
+    crash_workload();
+    exit(0);
+  }
+  if (argc == 2 && (strcmp(argv[1], "recover-old") == 0 ||
+                    strcmp(argv[1], "recover-new") == 0)) {
+    recover_verify(strcmp(argv[1], "recover-new") == 0);
+    exit(0);
+  }
   if (argc == 2 && strcmp(argv[1], "visibility") == 0) {
     publication_visibility();
     exit(0);
@@ -380,7 +574,8 @@ main(int argc, char **argv)
       run("buffer cache capacity boundary", cache_limit) ||
       run("overlap rejects all blocks and output", conflict) ||
       run("publication conflicts with another owner", other_speculation) ||
-      run("freeze waits for sole member", member_snapshot))
+      run("freeze waits for sole member", member_snapshot) ||
+      run("data and namespace commit or abort together", metadata_atomicity))
     exit(1);
   printf("spectest_commit: ALL TESTS PASSED\n");
   exit(0);

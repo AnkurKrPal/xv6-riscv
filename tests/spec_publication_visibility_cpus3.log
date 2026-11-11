@@ -14,9 +14,9 @@ publication-test: READER_WAIT
 publication-test: READER_WAIT
 publication-test: CACHE_READY
 publication-test: DURABLE
-pub: STAT_RETURNED
-pub: OUTPUT_RECEIVED
 pub: COMMIT_RETURNED
 pub: READ_RETURNED
+pub: OUTPUT_RECEIVED
+pub: STAT_RETURNED
 pub: VISIBILITY PASSED
 $ QEMU: Terminated

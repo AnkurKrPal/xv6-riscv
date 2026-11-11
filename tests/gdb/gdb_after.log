@@ -1,0 +1,34 @@
+s_sstatus (x=2) at kernel/riscv.h:67
+67	  __asm__ __volatile__("csrs sstatus, %0" ::"rK"(x) : "memory");
++break /Users/prajwal/Desktop/Programming/Projects/OS_Project/xv6-riscv/kernel/spec_commit.c:39 if count >= 30
+Breakpoint 1 at 0x80002c9a: file kernel/spec_commit.c, line 39.
++echo DEBUGGER_READY\n
+DEBUGGER_READY
++continue
+
+Breakpoint 1, spec_fs_commit (spec=spec@entry=2) at kernel/spec_commit.c:39
+39	  if (count < 0 || count > LOGBLOCKS || count >= NBUF)
++echo FIX: reject before cache or journal mutation\n
+FIX: reject before cache or journal mutation
++print count
+$1 = 30
++print log.lh.n
+$2 = 0
++print log.spec_committing
+$3 = 0
++bt
+#0  spec_fs_commit (spec=spec@entry=2) at kernel/spec_commit.c:39
+#1  0x0000000080002d74 in spec_commit_transaction () at kernel/spec_commit.c:86
+#2  0x0000000080002988 in spec_commit () at kernel/spec_state.c:338
+#3  0x00000000800047f2 in sys_xcommit () at kernel/sysproc.c:123
+#4  0x00000000800045aa in syscall () at kernel/syscall.c:152
+#5  0x0000000080004334 in usertrap () at kernel/trap.c:68
+#6  0x0000003ffffff09c in ?? ()
++finish
+0x0000000080002d74 in spec_commit_transaction () at kernel/spec_commit.c:86
+86	  result = spec_fs_commit(spec);
+Value returned is $4 = -6
++print (int)$a0
+$5 = -6
++detach
+[Inferior 1 (process 1) detached]

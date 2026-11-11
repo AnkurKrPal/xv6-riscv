@@ -47,6 +47,7 @@ struct log {
   int dev;
   int ncommit;
   int spec_committing;
+  spec_id_t spec_owner;
   int spec_capacity; // On-disk payload and buffer-cache bound.
   int readers;       // Whole inode read/stat operations outside begin_op().
   int spec_waiters;  // Close admission while publishers drain existing work.
@@ -56,6 +57,21 @@ struct log log;
 
 static void recover_from_log(void);
 static void commit();
+
+#ifdef SPEC_CRASH_TEST
+// Set by the host debugger before boot. Matching checkpoints park the journal
+// owner after completed I/O, so the host can kill QEMU at an exact boundary.
+volatile int spec_crash_target;
+__attribute__((noinline)) void
+spec_commit_checkpoint(int phase, int progress)
+{
+  if (phase == spec_crash_target) {
+    printk("crash-test: STOP phase=%d progress=%d\n", phase, progress);
+    while (spec_crash_target == phase)
+      asm volatile("wfi");
+  }
+}
+#endif
 
 #ifdef SPEC_COMMIT_TEST
 // Deterministic visibility regression only. This is excluded from the normal
@@ -79,7 +95,7 @@ publication_test_pause(char *phase)
 #endif
 
 static int
-reserve_spec_log(int blocks)
+reserve_spec_log(spec_id_t spec, int blocks)
 {
   if (blocks < 0 || blocks > log.spec_capacity)
     return SPEC_ERR_NO_SPACE;
@@ -95,6 +111,7 @@ reserve_spec_log(int blocks)
   }
   log.spec_waiters--;
   log.spec_committing = 1;
+  log.spec_owner = spec;
   log.committing = 1;
   log.outstanding = 1;
   release(&log.lock);
@@ -109,14 +126,30 @@ release_spec_log(void)
   // synchronously completed write_log, write_head, install_trans and clearing
   // the header. Readers must not be admitted until either case is complete.
   if (log.lh.n != 0 || !log.spec_committing || !log.committing ||
-      log.outstanding != 1 || log.readers != 0)
+      log.outstanding != 1 || log.readers != 0 ||
+      log.spec_owner == SPEC_ID_NONE)
     panic("release_spec_log: incomplete");
   log.outstanding = 0;
   log.committing = 0;
   log.spec_committing = 0;
+  log.spec_owner = SPEC_ID_NONE;
   log.ncommit++;
   wakeup(&log);
   release(&log.lock);
+}
+
+int
+spec_log_is_owner(spec_id_t spec)
+{
+  int owner;
+
+  if (spec == SPEC_ID_NONE || spec_current_id() != spec)
+    return 0;
+  acquire(&log.lock);
+  owner = log.spec_owner == spec && log.spec_committing && log.committing &&
+          log.outstanding == 1 && log.readers == 0;
+  release(&log.lock);
+  return owner;
 }
 
 // Register before acquiring any inode/buffer lock. Keeping admission for a
@@ -195,6 +228,10 @@ install_trans(int recovering)
       bunpin(dbuf);
     brelse(lbuf);
     brelse(dbuf);
+#ifdef SPEC_CRASH_TEST
+    if (!recovering && log.spec_committing && tail == 0)
+      spec_commit_checkpoint(SPEC_PHASE_INSTALL_PARTIAL, tail + 1);
+#endif
   }
 }
 
@@ -242,9 +279,18 @@ recover_from_log(void)
 void
 begin_op(void)
 {
+#ifdef SPEC_CRASH_TEST
+  int reported = 0;
+#endif
   acquire(&log.lock);
   while (1) {
     if (log.committing || log.spec_committing || log.spec_waiters != 0) {
+#ifdef SPEC_CRASH_TEST
+      if (log.spec_committing && !reported) {
+        printk("crash-test: JOURNAL_WAIT\n");
+        reported = 1;
+      }
+#endif
       sleep_prepare(&log);
       release(&log.lock);
       sleep();
@@ -310,6 +356,10 @@ write_log(void)
     bwrite(to); // write the log
     brelse(from);
     brelse(to);
+#ifdef SPEC_CRASH_TEST
+    if (log.spec_committing && tail == 0)
+      spec_commit_checkpoint(SPEC_PHASE_LOG_PARTIAL, tail + 1);
+#endif
   }
 }
 
@@ -318,10 +368,22 @@ commit()
 {
   if (log.lh.n > 0) {
     write_log();      // Write modified blocks from cache to log
+#ifdef SPEC_CRASH_TEST
+    if (log.spec_committing)
+      spec_commit_checkpoint(SPEC_PHASE_LOG_READY, log.lh.n);
+#endif
     write_head();     // Write header to disk -- the real commit
+#ifdef SPEC_CRASH_TEST
+    if (log.spec_committing)
+      spec_commit_checkpoint(SPEC_PHASE_HEADER_COMMITTED, log.lh.n);
+#endif
     install_trans(0); // Now install writes to home locations
     log.lh.n = 0;
     write_head(); // Erase the transaction from the log
+#ifdef SPEC_CRASH_TEST
+    if (log.spec_committing)
+      spec_commit_checkpoint(SPEC_PHASE_HEADER_CLEARED, 0);
+#endif
   }
 }
 
@@ -411,12 +473,18 @@ spec_log_publish(spec_id_t spec, const struct spec_commit_block *blocks,
   if (actual != count)
     return SPEC_ERR_COMMIT;
 
-  result = reserve_spec_log(count);
+  result = reserve_spec_log(spec, count);
   if (result != SPEC_OK)
     return result;
 
+#ifdef SPEC_CRASH_TEST
+  spec_commit_checkpoint(SPEC_PHASE_RESERVED, count);
+#endif
   result = spec_conflict_check(spec, blocks);
   if (result == SPEC_OK) {
+#ifdef SPEC_CRASH_TEST
+    spec_commit_checkpoint(SPEC_PHASE_CHECKED, count);
+#endif
     // No recoverable failures remain once the first real buffer changes.
     // S7's bwrite hook skips this owner but marks other overlapping owners.
     for (b = blocks; b != 0; b = b->next) {
@@ -424,6 +492,10 @@ spec_log_publish(spec_id_t spec, const struct spec_commit_block *blocks,
       memmove(bp->data, b->data, BSIZE);
       log_write(bp);
       brelse(bp);
+#ifdef SPEC_CRASH_TEST
+      if (b == blocks)
+        spec_commit_checkpoint(SPEC_PHASE_CACHE_PARTIAL, 1);
+#endif
 #ifdef SPEC_COMMIT_TEST
       if (b == blocks)
         publication_test_pause("CACHE_PARTIAL");

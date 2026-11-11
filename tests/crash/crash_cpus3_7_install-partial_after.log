@@ -1,0 +1,24 @@
+
+xv6 kernel is booting
+
+test
+spec_output: steps 5 & 6 (L4 flush/discard & L9 safe failure) PASSED
+pipe: steps 7, 8, 9, 10 (L5, L6, L7, L10 pipe isolation and flush) PASSED
+hart 2 starting
+hart 1 starting
+recovering tail 0 dst 34
+recovering tail 1 dst 46
+recovering tail 2 dst 1238
+recovering tail 3 dst 1239
+recovering tail 4 dst 1240
+recovering tail 5 dst 1242
+recovering tail 6 dst 1243
+recovering tail 7 dst 33
+recovering tail 8 dst 47
+recovering tail 9 dst 1244
+recovering tail 10 dst 35
+recovering tail 11 dst 1245
+init: starting sh
+$ speccommit recover-new
+crash: RECOVERY VERIFIED
+$ QEMU: Terminated

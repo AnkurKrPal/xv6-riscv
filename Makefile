@@ -111,6 +111,15 @@ $K/log_publication_test.o: $K/log.c $K/log.h $K/spec_commit.h
 $K/kernel-publication-test: $(filter-out $K/log.o,$(OBJS)) $K/log_publication_test.o $K/kernel.ld
 	$(LD) $(LDFLAGS) -T $K/kernel.ld -o $@ $(filter-out $K/log.o,$(OBJS)) $K/log_publication_test.o
 
+$K/log_crash_test.o: $K/log.c $K/log.h $K/spec_commit.h
+	$(CC) $(CFLAGS) -DSPEC_CRASH_TEST -c -o $@ $<
+
+$K/spec_commit_crash_test.o: $K/spec_commit.c $K/spec_commit.h
+	$(CC) $(CFLAGS) -DSPEC_CRASH_TEST -c -o $@ $<
+
+$K/kernel-crash-test: $(filter-out $K/log.o $K/spec_commit.o,$(OBJS)) $K/log_crash_test.o $K/spec_commit_crash_test.o $K/kernel.ld
+	$(LD) $(LDFLAGS) -T $K/kernel.ld -o $@ $(filter-out $K/log.o $K/spec_commit.o,$(OBJS)) $K/log_crash_test.o $K/spec_commit_crash_test.o
+
 tags: $(OBJS)
 	etags kernel/*.S kernel/*.c
 
@@ -126,6 +135,12 @@ $U/usys.S : $U/usys.pl
 
 $U/usys.o : $U/usys.S
 	$(CC) $(CFLAGS) -c -o $U/usys.o $U/usys.S
+
+# Source follows P3 ownership name; executable fits xv6's 14-byte DIRSIZ.
+$U/_speccommit: $U/spectest_commit.o $(ULIB) $U/user.ld
+	$(LD) $(LDFLAGS) -T $U/user.ld -o $@ $U/spectest_commit.o $(ULIB)
+	$(OBJDUMP) -S $@ > $U/speccommit.asm
+	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $U/speccommit.sym
 
 $U/_forktest: $U/forktest.o $(ULIB)
 	# forktest has less library code linked in - needs to be small
@@ -176,7 +191,7 @@ fs.img: mkfs/mkfs README demo/demoFile.txt $(UPROGS)
 clean: 
 	rm -f *.tex *.dvi *.idx *.aux *.log *.ind *.ilg \
 	*/*.o */*.d */*.asm */*.sym \
-	$K/kernel $K/kernel-publication-test fs.img \
+	$K/kernel $K/kernel-publication-test $K/kernel-crash-test fs.img \
 	mkfs/mkfs .gdbinit \
         $U/usys.S \
 	$(UPROGS)

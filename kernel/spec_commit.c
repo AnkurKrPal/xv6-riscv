@@ -92,6 +92,12 @@ spec_commit_transaction(void)
     return result;
   }
 
+  // spec_fs_commit returns OK only after exclusive check/publication and the
+  // synchronous durability fence. This is the sole successful P4 notification
+  // path; every earlier failure discards output and never calls flush.
+#ifdef SPEC_CRASH_TEST
+  spec_commit_checkpoint(SPEC_PHASE_BEFORE_FLUSH, 0);
+#endif
   spec_shadow_discard(spec);
   result = spec_output_flush(spec);
   if (result != SPEC_OK) {

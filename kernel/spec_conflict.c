@@ -16,6 +16,11 @@ spec_conflict_check(spec_id_t spec, const struct spec_commit_block *blocks)
   uint writes;
   int result;
 
+  // A successful check is meaningful only while this caller owns the journal.
+  // Reject accidental callers that check before reservation (or after release).
+  if (!spec_log_is_owner(spec))
+    return SPEC_ERR_BUSY;
+
   for (b = blocks; b != 0; b = b->next) {
     result = spec_shadow_get_write_count(spec, b->dev, b->blockno, &writes);
     if (result != SPEC_OK)

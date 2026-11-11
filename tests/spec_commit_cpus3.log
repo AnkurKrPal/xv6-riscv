@@ -14,8 +14,9 @@ spectest_commit: buffer cache capacity boundary OK
 spectest_commit: overlap rejects all blocks and output OK
 spectest_commit: publication conflicts with another owner OK
 spectest_commit: freeze waits for sole member OK
-spectest_commit: ALL TESTS PASSEDspectest_pr
-oc
+spectest_commit: data and namespace commit or abort together OK
+spectest_commit: ALL TESTS PASSEDspectest_proc
+
 $ spectest_proc: invalid transitions OK
 spectest_proc: fork then commit OK
 spectest_proc: fork then abort OK

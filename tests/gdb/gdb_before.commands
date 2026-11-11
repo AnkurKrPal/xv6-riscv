@@ -1,0 +1,13 @@
+break panic
+echo DEBUGGER_READY\n
+continue
+echo HISTORICAL FAILURE: original kernel, no fault injection\n
+print s
+bt
+print log.lh.n
+print log.outstanding
+print log.spec_committing
+print sizeof(bcache.buf) / sizeof(bcache.buf[0])
+set $pinned = (bcache.buf[0].refcnt > 0) + (bcache.buf[1].refcnt > 0) + (bcache.buf[2].refcnt > 0) + (bcache.buf[3].refcnt > 0) + (bcache.buf[4].refcnt > 0) + (bcache.buf[5].refcnt > 0) + (bcache.buf[6].refcnt > 0) + (bcache.buf[7].refcnt > 0) + (bcache.buf[8].refcnt > 0) + (bcache.buf[9].refcnt > 0) + (bcache.buf[10].refcnt > 0) + (bcache.buf[11].refcnt > 0) + (bcache.buf[12].refcnt > 0) + (bcache.buf[13].refcnt > 0) + (bcache.buf[14].refcnt > 0) + (bcache.buf[15].refcnt > 0) + (bcache.buf[16].refcnt > 0) + (bcache.buf[17].refcnt > 0) + (bcache.buf[18].refcnt > 0) + (bcache.buf[19].refcnt > 0) + (bcache.buf[20].refcnt > 0) + (bcache.buf[21].refcnt > 0) + (bcache.buf[22].refcnt > 0) + (bcache.buf[23].refcnt > 0) + (bcache.buf[24].refcnt > 0) + (bcache.buf[25].refcnt > 0) + (bcache.buf[26].refcnt > 0) + (bcache.buf[27].refcnt > 0) + (bcache.buf[28].refcnt > 0) + (bcache.buf[29].refcnt > 0)
+print $pinned
+detach
