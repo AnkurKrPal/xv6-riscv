@@ -251,6 +251,7 @@ spec_output_write_pipe(spec_id_t spec, struct pipe *pi, const char *kbuf, int n)
   return written;
 }
 
+// Step 16 (L8): Preserve output ordering; flush only when P3 confirms commit
 int
 spec_output_flush(spec_id_t spec)
 {

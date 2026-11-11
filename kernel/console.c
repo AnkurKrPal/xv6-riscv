@@ -64,7 +64,8 @@ consolewrite(int user_src, uint64 src, int n)
 {
   struct proc *p = myproc();
 
-  // Step 3 (L2): Intercept speculative user-console writes into private queue
+  // Step 3 (L2) & Step 16 (L8): Intercept speculative console writes;
+  // preserved in FIFO order and flushed only upon durable commit
   if (p && p->spec != SPEC_ID_NONE) {
     return spec_output_write_console(p->spec, user_src, src, n);
   }
