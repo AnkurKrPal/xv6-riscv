@@ -27,6 +27,7 @@ struct buf *spec_shadow_prepare(struct buf *);
 int spec_shadow_is_buffer(struct buf *);
 
 // Switch a locked buffer to its private copy before changing its data.
+//added by Saharsh B24CS1105
 static int
 prepare_write(struct buf **bp)
 {
@@ -40,6 +41,7 @@ prepare_write(struct buf **bp)
 }
 
 // Keep shadow changes out of the shared filesystem journal.
+//added by Saharsh B24CS1105
 static void
 fs_log_write(struct buf *bp)
 {
@@ -141,6 +143,7 @@ fsinit(int dev)
 }
 
 // Zero a block.
+//modified by Saharsh B24CS1105
 static int
 bzero(int dev, int bno)
 {
@@ -469,6 +472,7 @@ iunlock(struct inode *ip)
 }
 
 // Mark the on-disk inode free.
+//modified by Saharsh B24CS1105
 static void
 ifree(uint dev, uint inum)
 {
@@ -610,18 +614,18 @@ bmap(struct inode *ip, struct dinode *view, uint bn, int alloc)
         brelse(bp);
         return 0;
       }
-      addr = balloc(ip->dev);
-      if (addr) {
-        if (prepare_write(&bp) < 0) {
-          brelse(bp);
-          return 0;
-        }
-        a = (uint *)bp->data;
-        if (a[bn] == 0) {
+      // Reserve the pointer block before allocating the data it will own.
+      if (prepare_write(&bp) < 0) {
+        brelse(bp);
+        return 0;
+      }
+      a = (uint *)bp->data;
+      addr = a[bn];
+      if (addr == 0) {
+        addr = balloc(ip->dev);
+        if (addr) {
           a[bn] = addr;
           fs_log_write(bp);
-        } else {
-          addr = a[bn];
         }
       }
     }

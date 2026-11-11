@@ -255,8 +255,13 @@ sys_unlink(void)
   }
 
   memset(&de, 0, sizeof(de));
-  if (writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+  if (writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de)) {
+    if (spec_current_id() != SPEC_ID_NONE) {
+      iunlockput(ip);
+      goto bad;
+    }
     panic("unlink: writei");
+  }
   if (ip_view.type == T_DIR) {
     inode_view_read(dp, &dp_view);
     dp_view.nlink--;
