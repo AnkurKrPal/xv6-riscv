@@ -1,4 +1,4 @@
-// S13: filesystem isolation regressions for speculative metadata and data.
+// S13/S14: filesystem isolation, capacity, inode-cache and concurrent I/O tests.
 #include "kernel/types.h"
 #include "kernel/fs.h"
 #include "kernel/stat.h"
@@ -406,6 +406,244 @@ indirect_growth_abort(void)
   unlink("sfs-indirect");
 }
 
+// Verify every byte and EOF of a block-sized file in the selected view.
+//added by Saharsh B24CS1105
+static void
+expect_blocks(const char *path, int count, char value)
+{
+  char block[BSIZE];
+  int fd = open(path, O_RDONLY);
+
+  CHECK(fd >= 0, 220);
+  for (int i = 0; i < count; i++) {
+    CHECK(read(fd, block, sizeof(block)) == sizeof(block), 221);
+    for (int j = 0; j < sizeof(block); j++)
+      CHECK(block[j] == value, 222);
+  }
+  CHECK(read(fd, block, 1) == 0, 223);
+  close(fd);
+}
+
+// Create enough committed blocks to test staging without new disk allocation.
+//added by Saharsh B24CS1105
+static void
+prepare_blocks(const char *path, int count, char value)
+{
+  char block[BSIZE];
+
+  unlink(path);
+  int fd = open(path, O_CREATE | O_WRONLY);
+  CHECK(fd >= 0, 224);
+  memset(block, value, sizeof(block));
+  for (int i = 0; i < count; i++)
+    CHECK(write(fd, block, sizeof(block)) == sizeof(block), 225);
+  close(fd);
+  sync();
+}
+
+// Fill staging twice, check real bytes survive abort, then commit a fresh view.
+//added by Saharsh B24CS1105
+static void
+overflow_reuse(void)
+{
+  char block[BSIZE];
+  const char *path = "sfs-overflow";
+  int filled = -1;
+
+  prepare_blocks(path, 70, 'O');
+  for (int round = 0; round < 2; round++) {
+    CHECK(xbegin() == SPEC_OK, 226);
+    int fd = open(path, O_WRONLY);
+    CHECK(fd >= 0, 227);
+    memset(block, 'P', sizeof(block));
+    int count;
+    for (count = 0; count < 70; count++) {
+      if (write(fd, block, sizeof(block)) != sizeof(block))
+        break;
+    }
+    CHECK(count > 0 && count < 70, 228);
+    CHECK(filled == -1 || count == filled, 229);
+    filled = count;
+    close(fd);
+    CHECK(xabort() == SPEC_OK, 230);
+    expect_blocks(path, 70, 'O');
+  }
+  CHECK(xbegin() == SPEC_OK, 231);
+  int fd = open(path, O_WRONLY);
+  CHECK(fd >= 0, 232);
+  memset(block, 'R', sizeof(block));
+  CHECK(write(fd, block, sizeof(block)) == sizeof(block), 233);
+  close(fd);
+  CHECK(xcommit() == SPEC_OK, 234);
+  fd = open(path, O_RDONLY);
+  CHECK(fd >= 0, 235);
+  for (int i = 0; i < 70; i++) {
+    CHECK(read(fd, block, sizeof(block)) == sizeof(block), 236);
+    for (int j = 0; j < sizeof(block); j++)
+      CHECK(block[j] == (i == 0 ? 'R' : 'O'), 237);
+  }
+  close(fd);
+  unlink(path);
+}
+
+// Keep cached inode references alive while size/content change privately.
+//added by Saharsh B24CS1105
+static void
+retained_inode_view(int commit)
+{
+  const char *path = "sfs-retained";
+  struct stat st;
+  int ready[2], go[2], ack[2], gate[2];
+  char token, bytes[8];
+
+  prepare_file(path, "old", 10);
+  CHECK(pipe(ready) == 0 && pipe(go) == 0 && pipe(ack) == 0 &&
+        pipe(gate) == 0, 12);
+  int pid = fork(); // This observer keeps its committed inode reference.
+  CHECK(pid >= 0, 13);
+  if (pid == 0) {
+    close(ready[0]);
+    close(go[1]);
+    close(ack[0]);
+    close(gate[1]);
+    int fd = open(path, O_RDONLY);
+    CHECK(fd >= 0, 14);
+    CHECK(fstat(fd, &st) == 0 && st.size == 3, 15);
+    CHECK(write(ready[1], "R", 1) == 1, 16);
+    close(ready[1]);
+    CHECK(read(go[0], &token, 1) == 1, 17);
+    close(go[0]);
+    pause(20);
+    CHECK(fstat(fd, &st) == 0 && st.size == 3, 18);
+    CHECK(read(fd, bytes, sizeof(bytes)) == 3 &&
+          memcmp(bytes, "old", 3) == 0, 19);
+    CHECK(write(ack[1], "A", 1) == 1, 20);
+    close(ack[1]);
+    CHECK(read(gate[0], &token, 1) == 1, 21);
+    close(gate[0]);
+    CHECK(fstat(fd, &st) == 0 && st.size == (commit ? 7 : 3), 22);
+    int n = read(fd, bytes, sizeof(bytes)); // Same descriptor, still at offset 3.
+    CHECK(n == (commit ? 4 : 0), 23);
+    if (commit)
+      CHECK(memcmp(bytes, "PLUS", 4) == 0, 24);
+    close(fd);
+    exit(0);
+  }
+
+  close(ready[1]);
+  close(go[0]);
+  close(ack[1]);
+  close(gate[0]);
+  CHECK(read(ready[0], &token, 1) == 1, 25);
+  close(ready[0]);
+  int fd = open(path, O_RDWR); // Also retain the writer's original inode handle.
+  CHECK(fd >= 0, 26);
+  int start = uptime();
+  CHECK(write(go[1], "G", 1) == 1, 27);
+  close(go[1]);
+  CHECK(xbegin() == SPEC_OK, 28);
+  CHECK(read(fd, bytes, 3) == 3, 29);
+  CHECK(write(fd, "PLUS", 4) == 4, 30);
+  CHECK(fstat(fd, &st) == 0 && st.size == 7, 31);
+  CHECK((uint)(uptime() - start) < 20, 32);
+  CHECK(read(ack[0], &token, 1) == 1, 33);
+  close(ack[0]);
+  CHECK((commit ? xcommit() : xabort()) == SPEC_OK, 34);
+  CHECK(fstat(fd, &st) == 0 && st.size == (commit ? 7 : 3), 35);
+  close(fd);
+  CHECK(write(gate[1], "F", 1) == 1, 36);
+  close(gate[1]);
+  wait_child(pid, 0, 37);
+  expect_file(path, commit ? "oldPLUS" : "old", 38);
+  unlink(path);
+}
+
+// Check retained ordinary descriptors observe the new size after commit.
+//added by Saharsh B24CS1105
+static void
+retained_inode_commit(void)
+{
+  retained_inode_view(1);
+}
+
+// Check retained descriptors observe the original size again after abort.
+//added by Saharsh B24CS1105
+static void
+retained_inode_abort(void)
+{
+  retained_inode_view(0);
+}
+
+// Read whole two-block generations while another process commits or aborts.
+//added by Saharsh B24CS1105
+static void
+concurrent_readers(void)
+{
+  const char *path = "sfs-concurrent";
+  static char data[2 * BSIZE];
+  int ready[2], go[2], readers[2];
+  char token;
+
+  prepare_blocks(path, 2, 'A');
+  CHECK(pipe(ready) == 0 && pipe(go) == 0, 50);
+  for (int child = 0; child < 2; child++) {
+    readers[child] = fork();
+    CHECK(readers[child] >= 0, 51);
+    if (readers[child] == 0) {
+      struct stat st;
+      close(ready[0]);
+      close(go[1]);
+      int anchor = open(path, O_RDONLY);
+      CHECK(anchor >= 0, 52);
+      CHECK(fstat(anchor, &st) == 0 && st.size == sizeof(data), 53);
+      CHECK(write(ready[1], "R", 1) == 1, 54);
+      close(ready[1]);
+      CHECK(read(go[0], &token, 1) == 1, 55);
+      close(go[0]);
+      for (int i = 0; i < 80; i++) {
+        int fd = open(path, O_RDONLY);
+        CHECK(fd >= 0, 56);
+        CHECK(read(fd, data, sizeof(data)) == sizeof(data), 57);
+        CHECK(data[0] == 'A' || data[0] == 'B', 58);
+        for (int j = 0; j < sizeof(data); j++)
+          CHECK(data[j] == data[0], 59);
+        close(fd);
+        CHECK(fstat(anchor, &st) == 0 && st.size == sizeof(data), 60);
+        pause(1);
+      }
+      close(anchor);
+      exit(0);
+    }
+  }
+  close(ready[1]);
+  close(go[0]);
+  CHECK(read(ready[0], &token, 1) == 1 &&
+        read(ready[0], &token, 1) == 1, 61);
+  close(ready[0]);
+  int start = uptime();
+  CHECK(write(go[1], "GG", 2) == 2, 62);
+  close(go[1]);
+  for (int round = 0; round < 8; round++) {
+    CHECK(xbegin() == SPEC_OK, 63);
+    int fd = open(path, O_WRONLY);
+    CHECK(fd >= 0, 64);
+    memset(data, round % 2 ? 'X' : (round % 4 ? 'A' : 'B'), sizeof(data));
+    CHECK(write(fd, data, sizeof(data)) == sizeof(data), 65);
+    close(fd);
+    // Let ordinary readers run while the private generation is still staged.
+    pause(2);
+    CHECK((round % 2 ? xabort() : xcommit()) == SPEC_OK, 66);
+  }
+  CHECK((uint)(uptime() - start) < 80, 67);
+  int first_status, second_status;
+  int first = wait(&first_status), second = wait(&second_status);
+  CHECK(((first == readers[0] && second == readers[1]) ||
+         (first == readers[1] && second == readers[0])) &&
+        first_status == 0 && second_status == 0, 68);
+  expect_blocks(path, 2, 'A');
+  unlink(path);
+}
+
 // Run one test in isolation and kill it if an operation deadlocks.
 //added by Saharsh B24CS1105
 static int
@@ -463,7 +701,7 @@ run(const char *name, void (*test)(void))
 }
 
 // Run all filesystem isolation regressions.
-//added by Saharsh B24CS1105
+//modified by Saharsh B24CS1105
 int
 main(void)
 {
@@ -478,6 +716,10 @@ main(void)
     {"full table unlink failure", full_table_unlink},
     {"link counts, truncate and same-group reads", metadata_abort},
     {"indirect growth and abort", indirect_growth_abort},
+    {"overflow, abort and slot reuse", overflow_reuse},
+    {"retained inode after commit", retained_inode_commit},
+    {"retained inode after abort", retained_inode_abort},
+    {"concurrent readers during commit and abort", concurrent_readers},
   };
 
   for (int i = 0; i < sizeof(tests) / sizeof(tests[0]); i++) {
