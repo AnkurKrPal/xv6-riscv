@@ -3,6 +3,7 @@
 // clang-format off
 struct buf;
 struct context;
+struct dinode;
 struct file;
 struct inode;
 struct pipe;
@@ -99,6 +100,10 @@ void            iput(struct inode*);
 void            iunlock(struct inode*);
 void            iunlockput(struct inode*);
 void            iupdate(struct inode*);
+//added by Saharsh B24CS1105
+void            inode_view_read(struct inode*, struct dinode*);
+//added by Saharsh B24CS1105
+int             inode_view_write(struct inode*, const struct dinode*);
 int             namecmp(const char*, const char*);
 struct inode*   namei(char*);
 struct inode*   nameiparent(char*, char*);
@@ -106,6 +111,8 @@ int             readi(struct inode*, int, uint64, uint, uint);
 void            stati(struct inode*, struct stat*);
 int             writei(struct inode*, int, uint64, uint, uint);
 void            itrunc(struct inode*);
+//added by Saharsh B24CS1105
+int             itrunc_prepare(struct inode*);
 void            ireclaim(int);
 
 // kalloc.c

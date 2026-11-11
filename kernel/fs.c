@@ -80,7 +80,7 @@ inode_cache_install(struct inode *ip, const struct dinode *view)
 // Read the caller's inode metadata view from its selected inode block.
 // Active speculations therefore see their own shadowed metadata only.
 //added by Saharsh B24CS1105
-static void
+void
 inode_view_read(struct inode *ip, struct dinode *view)
 {
   struct buf *bp;
@@ -95,7 +95,7 @@ inode_view_read(struct inode *ip, struct dinode *view)
 // Store metadata in the caller's selected inode block without publishing a
 // speculative view through the shared in-memory inode cache.
 //added by Saharsh B24CS1105
-static int
+int
 inode_view_write(struct inode *ip, const struct dinode *view)
 {
   struct buf *bp;
@@ -159,8 +159,27 @@ bzero(int dev, int bno)
 
 // Blocks.
 
+static void bfree(int, uint);
+
+// Reserve the bitmap shadow that will contain an allocation update.
+//added by Saharsh B24CS1105
+static int
+bitmap_prepare(int dev, uint b)
+{
+  struct buf *bp;
+
+  bp = bread(dev, BBLOCK(b, sb));
+  if (prepare_write(&bp) < 0) {
+    brelse(bp);
+    return -1;
+  }
+  brelse(bp);
+  return 0;
+}
+
 // Allocate a zeroed disk block.
 // returns 0 if out of disk space.
+//modified by Saharsh B24CS1105
 static uint
 balloc(uint dev)
 {
@@ -182,8 +201,10 @@ balloc(uint dev)
         bp->data[bi / 8] |= m;           // Mark block in use.
         fs_log_write(bp);
         brelse(bp);
-        if (bzero(dev, b + bi) < 0)
+        if (bzero(dev, b + bi) < 0) {
+          bfree(dev, b + bi);
           return 0;
+        }
         return b + bi;
       }
     }
@@ -194,6 +215,7 @@ balloc(uint dev)
 }
 
 // Free a disk block.
+//modified by Saharsh B24CS1105
 static void
 bfree(int dev, uint b)
 {
@@ -307,6 +329,7 @@ static struct inode *iget(uint dev, uint inum);
 // Mark it as allocated by  giving it type type.
 // Returns an unlocked but allocated and referenced inode,
 // or NULL if there is no free inode.
+//modified by Saharsh B24CS1105
 struct inode *
 ialloc(uint dev, short type)
 {
@@ -408,6 +431,7 @@ ilock(struct inode *ip)
 {
   struct buf *bp;
   struct dinode *dip;
+  struct dinode view;
 
   if (ip == 0 || ip->ref < 1)
     panic("ilock");
@@ -424,9 +448,13 @@ ilock(struct inode *ip)
     ip->size = dip->size;
     memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
     brelse(bp);
-    ip->valid = 1;
-    if (ip->type == 0)
-      panic("ilock: no type");
+    if (ip->type == 0) {
+      inode_view_read(ip, &view);
+      if (view.type == 0)
+        panic("ilock: no type");
+    } else {
+      ip->valid = 1;
+    }
   }
 }
 
@@ -464,24 +492,34 @@ ifree(uint dev, uint inum)
 // to it, free the inode (and its content) on disk.
 // All calls to iput() must be inside a transaction in
 // case it has to free the inode.
+//modified by Saharsh B24CS1105
 void
 iput(struct inode *ip)
 {
+  struct dinode view;
+  int last = 0;
+
   acquire(&itable.lock);
 
-  // Last reference of an unlinked inode?  Capture dev/inum before ref--,
-  // since once ref hits 0, ip may be recycled by a concurrent iget()
-  // for a different inum.
-  int last = (ip->ref == 1 && ip->valid && ip->nlink == 0);
+  // Capture dev/inum before ref--, since once ref hits 0, ip may be
+  // recycled by a concurrent iget() for a different inum.
   uint dev = ip->dev, inum = ip->inum;
 
-  if (last) {
+  if (ip->ref == 1) {
     // ip->ref == 1 means no other process can have ip locked.
     acquiresleep(&ip->lock);
     release(&itable.lock);
 
-    itrunc(ip); // free the data blocks (type stays nonzero on disk)
-    ip->valid = 0;
+    inode_view_read(ip, &view);
+    last = view.type != 0 && view.nlink == 0;
+    if (last) {
+      if (itrunc_prepare(ip) < 0) {
+        last = 0;
+      } else {
+        itrunc(ip); // free the data blocks (type stays nonzero on disk)
+        ip->valid = 0;
+      }
+    }
 
     releasesleep(&ip->lock);
 
@@ -594,6 +632,46 @@ bmap(struct inode *ip, struct dinode *view, uint bn, int alloc)
   panic("bmap: out of range");
 }
 
+// Reserve inode and bitmap shadows before truncation changes any allocation.
+// Caller must hold ip->lock.
+//added by Saharsh B24CS1105
+int
+itrunc_prepare(struct inode *ip)
+{
+  int i, result = 0;
+  struct buf *bp;
+  struct dinode view;
+  uint *a;
+
+  if (spec_current_id() == SPEC_ID_NONE)
+    return 0;
+
+  inode_view_read(ip, &view);
+  if (inode_view_write(ip, &view) < 0)
+    return -1;
+
+  for (i = 0; i < NDIRECT; i++) {
+    if (view.addrs[i] && bitmap_prepare(ip->dev, view.addrs[i]) < 0)
+      return -1;
+  }
+
+  if (view.addrs[NDIRECT]) {
+    bp = bread(ip->dev, view.addrs[NDIRECT]);
+    a = (uint *)bp->data;
+    for (i = 0; i < NINDIRECT; i++) {
+      if (a[i] && bitmap_prepare(ip->dev, a[i]) < 0) {
+        result = -1;
+        break;
+      }
+    }
+    brelse(bp);
+    if (result < 0 || bitmap_prepare(ip->dev, view.addrs[NDIRECT]) < 0)
+      return -1;
+  }
+
+  return 0;
+}
+
 // Truncate inode (discard contents).
 // Caller must hold ip->lock.
 //modified by Saharsh B24CS1105
@@ -700,6 +778,10 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
     return -1;
   if (off + n > MAXFILE * BSIZE)
     return -1;
+  // Reserve the inode shadow before any data or bitmap block changes.
+  if (n != 0 && spec_current_id() != SPEC_ID_NONE &&
+      inode_view_write(ip, &view) < 0)
+    return -1;
 
   for (tot = 0; tot < n; tot += m, off += m, src += m) {
     uint addr = bmap(ip, &view, off / BSIZE, 1);
@@ -751,10 +833,9 @@ dirlookup(struct inode *dp, char *name, uint *poff)
   struct dirent de;
   struct dinode view;
 
-  if (dp->type != T_DIR)
-    panic("dirlookup not DIR");
-
   inode_view_read(dp, &view);
+  if (view.type != T_DIR)
+    panic("dirlookup not DIR");
   for (off = 0; off < view.size; off += sizeof(de)) {
     if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
       panic("dirlookup read");
@@ -849,10 +930,12 @@ skipelem(char *path, char *name)
 // If parent != 0, return the inode for the parent and copy the final
 // path element into name, which must have room for DIRSIZ bytes.
 // Must be called inside a transaction since it calls iput().
+//modified by Saharsh B24CS1105
 static struct inode *
 namex(char *path, int nameiparent, char *name)
 {
   struct inode *ip, *next;
+  struct dinode view;
 
   if (*path == '/')
     ip = iget(ROOTDEV, ROOTINO);
@@ -861,11 +944,12 @@ namex(char *path, int nameiparent, char *name)
 
   while ((path = skipelem(path, name)) != 0) {
     ilock(ip);
-    if (ip->type != T_DIR) {
+    inode_view_read(ip, &view);
+    if (view.type != T_DIR) {
       iunlockput(ip);
       return 0;
     }
-    if (ip->nlink == 0) {
+    if (view.nlink == 0) {
       iunlockput(ip);
       return 0;
     }

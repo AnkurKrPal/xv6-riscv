@@ -120,11 +120,13 @@ sys_fstat(void)
 }
 
 // Create the path new as a link to the same inode as old.
+//modified by Saharsh B24CS1105
 uint64
 sys_link(void)
 {
   char name[DIRSIZ], new[MAXPATH], old[MAXPATH];
   struct inode *dp, *ip;
+  struct dinode view;
 
   if (argstr(0, old, MAXPATH) < 0 || argstr(1, new, MAXPATH) < 0)
     return -1;
@@ -136,20 +138,25 @@ sys_link(void)
   }
 
   ilock(ip);
-  if (ip->type == T_DIR) {
+  inode_view_read(ip, &view);
+  if (view.type == T_DIR) {
     iunlockput(ip);
     end_op();
     return -1;
   }
 
-  if (ip->nlink >= NLINK_MAX) {
+  if (view.nlink >= NLINK_MAX) {
     iunlockput(ip);
     end_op();
     return -1;
   }
 
-  ip->nlink++;
-  iupdate(ip);
+  view.nlink++;
+  if (inode_view_write(ip, &view) < 0) {
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
   iunlock(ip);
 
   if ((dp = nameiparent(new, name)) == 0)
@@ -158,7 +165,8 @@ sys_link(void)
   // dp may have been unlinked while we resolved it; linking into an
   // orphaned directory leaks ip (itrunc discards the record without
   // dropping ip->nlink).  create() has the same guard.
-  if (dp->nlink == 0) {
+  inode_view_read(dp, &view);
+  if (view.nlink == 0) {
     iunlockput(dp);
     goto bad;
   }
@@ -175,21 +183,25 @@ sys_link(void)
 
 bad:
   ilock(ip);
-  ip->nlink--;
-  iupdate(ip);
+  inode_view_read(ip, &view);
+  view.nlink--;
+  inode_view_write(ip, &view);
   iunlockput(ip);
   end_op();
   return -1;
 }
 
 // Is the directory dp empty except for "." and ".." ?
+//modified by Saharsh B24CS1105
 static int
 isdirempty(struct inode *dp)
 {
   int off;
   struct dirent de;
+  struct dinode view;
 
-  for (off = 2 * sizeof(de); off < dp->size; off += sizeof(de)) {
+  inode_view_read(dp, &view);
+  for (off = 2 * sizeof(de); off < view.size; off += sizeof(de)) {
     if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
       panic("isdirempty: readi");
     if (de.inum != 0)
@@ -198,11 +210,13 @@ isdirempty(struct inode *dp)
   return 1;
 }
 
+//modified by Saharsh B24CS1105
 uint64
 sys_unlink(void)
 {
   struct inode *ip, *dp;
   struct dirent de;
+  struct dinode ip_view, dp_view;
   char name[DIRSIZ], path[MAXPATH];
   uint off;
 
@@ -224,10 +238,18 @@ sys_unlink(void)
   if ((ip = dirlookup(dp, name, &off)) == 0)
     goto bad;
   ilock(ip);
+  inode_view_read(ip, &ip_view);
 
-  if (ip->nlink < 1)
+  if (ip_view.nlink < 1)
     panic("unlink: nlink < 1");
-  if (ip->type == T_DIR && !isdirempty(ip)) {
+  if (ip_view.type == T_DIR && !isdirempty(ip)) {
+    iunlockput(ip);
+    goto bad;
+  }
+  // Reserve every private metadata block needed after directory removal.
+  if (spec_current_id() != SPEC_ID_NONE &&
+      ((ip_view.nlink == 1 && itrunc_prepare(ip) < 0) ||
+       (ip_view.nlink > 1 && inode_view_write(ip, &ip_view) < 0))) {
     iunlockput(ip);
     goto bad;
   }
@@ -235,14 +257,17 @@ sys_unlink(void)
   memset(&de, 0, sizeof(de));
   if (writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
     panic("unlink: writei");
-  if (ip->type == T_DIR) {
-    dp->nlink--;
-    iupdate(dp);
+  if (ip_view.type == T_DIR) {
+    inode_view_read(dp, &dp_view);
+    dp_view.nlink--;
+    if (inode_view_write(dp, &dp_view) < 0)
+      panic("unlink: parent update");
   }
   iunlockput(dp);
 
-  ip->nlink--;
-  iupdate(ip);
+  ip_view.nlink--;
+  if (inode_view_write(ip, &ip_view) < 0)
+    panic("unlink: inode update");
   iunlockput(ip);
 
   end_op();
@@ -255,24 +280,27 @@ bad:
   return -1;
 }
 
+//modified by Saharsh B24CS1105
 static struct inode *
 create(char *path, short type, short major, short minor)
 {
   struct inode *ip, *dp;
+  struct dinode ip_view, dp_view;
   char name[DIRSIZ];
 
   if ((dp = nameiparent(path, name)) == 0)
     return 0;
 
   ilock(dp);
+  inode_view_read(dp, &dp_view);
 
-  if (dp->nlink == 0) {
+  if (dp_view.nlink == 0) {
     iunlockput(dp);
     return 0;
   }
 
   // a new directory's ".." would push dp->nlink past its maximum
-  if (type == T_DIR && dp->nlink >= NLINK_MAX) {
+  if (type == T_DIR && dp_view.nlink >= NLINK_MAX) {
     iunlockput(dp);
     return 0;
   }
@@ -280,7 +308,9 @@ create(char *path, short type, short major, short minor)
   if ((ip = dirlookup(dp, name, 0)) != 0) {
     iunlockput(dp);
     ilock(ip);
-    if (type == T_FILE && (ip->type == T_FILE || ip->type == T_DEVICE))
+    inode_view_read(ip, &ip_view);
+    if (type == T_FILE &&
+        (ip_view.type == T_FILE || ip_view.type == T_DEVICE))
       return ip;
     iunlockput(ip);
     return 0;
@@ -292,10 +322,12 @@ create(char *path, short type, short major, short minor)
   }
 
   ilock(ip);
-  ip->major = major;
-  ip->minor = minor;
-  ip->nlink = 1;
-  iupdate(ip);
+  inode_view_read(ip, &ip_view);
+  ip_view.major = major;
+  ip_view.minor = minor;
+  ip_view.nlink = 1;
+  if (inode_view_write(ip, &ip_view) < 0)
+    goto fail;
 
   if (type == T_DIR) { // Create . and .. entries.
     // No ip->nlink++ for ".": avoid cyclic ref count.
@@ -308,8 +340,10 @@ create(char *path, short type, short major, short minor)
 
   if (type == T_DIR) {
     // now that success is guaranteed:
-    dp->nlink++; // for ".."
-    iupdate(dp);
+    inode_view_read(dp, &dp_view);
+    dp_view.nlink++; // for ".."
+    if (inode_view_write(dp, &dp_view) < 0)
+      goto fail;
   }
 
   iunlockput(dp);
@@ -318,13 +352,15 @@ create(char *path, short type, short major, short minor)
 
 fail:
   // something went wrong. de-allocate ip.
-  ip->nlink = 0;
-  iupdate(ip);
+  inode_view_read(ip, &ip_view);
+  ip_view.nlink = 0;
+  inode_view_write(ip, &ip_view);
   iunlockput(ip);
   iunlockput(dp);
   return 0;
 }
 
+//modified by Saharsh B24CS1105
 uint64
 sys_open(void)
 {
@@ -332,6 +368,7 @@ sys_open(void)
   int fd, omode;
   struct file *f;
   struct inode *ip;
+  struct dinode view;
   int n;
 
   argint(1, &omode);
@@ -352,14 +389,21 @@ sys_open(void)
       return -1;
     }
     ilock(ip);
-    if (ip->type == T_DIR && omode != O_RDONLY) {
-      iunlockput(ip);
-      end_op();
-      return -1;
-    }
   }
 
-  if (ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)) {
+  inode_view_read(ip, &view);
+  if (view.type == T_DIR && omode != O_RDONLY) {
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+  if (view.type == T_DEVICE && (view.major < 0 || view.major >= NDEV)) {
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+  if ((omode & O_TRUNC) && view.type == T_FILE &&
+      itrunc_prepare(ip) < 0) {
     iunlockput(ip);
     end_op();
     return -1;
@@ -373,9 +417,9 @@ sys_open(void)
     return -1;
   }
 
-  if (ip->type == T_DEVICE) {
+  if (view.type == T_DEVICE) {
     f->type = FD_DEVICE;
-    f->major = ip->major;
+    f->major = view.major;
   } else {
     f->type = FD_INODE;
     f->off = 0;
@@ -384,7 +428,7 @@ sys_open(void)
   f->readable = !(omode & O_WRONLY);
   f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
 
-  if ((omode & O_TRUNC) && ip->type == T_FILE) {
+  if ((omode & O_TRUNC) && view.type == T_FILE) {
     itrunc(ip);
   }
 
@@ -430,11 +474,13 @@ sys_mknod(void)
   return 0;
 }
 
+//modified by Saharsh B24CS1105
 uint64
 sys_chdir(void)
 {
   char path[MAXPATH];
   struct inode *ip;
+  struct dinode view;
   struct proc *p = myproc();
 
   begin_op();
@@ -443,7 +489,8 @@ sys_chdir(void)
     return -1;
   }
   ilock(ip);
-  if (ip->type != T_DIR) {
+  inode_view_read(ip, &view);
+  if (view.type != T_DIR) {
     iunlockput(ip);
     end_op();
     return -1;
