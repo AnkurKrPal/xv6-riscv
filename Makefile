@@ -157,6 +157,7 @@ UPROGS=\
 	$U/_dorphan\
 	$U/_sync\
 	$U/_spectest_proc\
+	$U/_spectest_fs\
 	$U/_speccommit\
 	$U/_agentd\
 
