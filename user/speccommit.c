@@ -4,6 +4,7 @@
 #include "kernel/fs.h"
 #include "kernel/fcntl.h"
 #include "kernel/spec.h"
+#include "kernel/stat.h"
 #include "user/user.h"
 
 #define CHECK(ok, step) do { if (!(ok)) exit(step); } while (0)
@@ -251,6 +252,101 @@ member_snapshot(void)
   unlink(path);
 }
 
+// Used only by run_spec_publication.py with the instrumented kernel. The host
+// releases two pre-opened outside readers exactly after the first cache copy.
+static char published_data[5 * BSIZE];
+static const char *added_path = "commit-added";
+
+static void
+verify_publication(void)
+{
+  struct stat st;
+  int fd = open(path, O_RDONLY);
+  CHECK(fd >= 0, 110);
+  CHECK(fstat(fd, &st) == 0 && st.size == sizeof(published_data), 111);
+  CHECK(read(fd, published_data, sizeof(published_data)) ==
+        sizeof(published_data), 112);
+  for (int i = 0; i < sizeof(published_data); i++)
+    CHECK(published_data[i] == 'P', 113);
+  close(fd);
+  fd = open(added_path, O_RDONLY);
+  CHECK(fd >= 0, 114);
+  CHECK(read(fd, block, 8) == 8 && memcmp(block, "metadata", 8) == 0, 115);
+  close(fd);
+}
+
+static void
+publication_visibility(void)
+{
+  int gate[2], done[2], status;
+  struct stat st;
+  char token;
+  prepare(3);
+  unlink(added_path);
+  CHECK(pipe(gate) == 0 && pipe(done) == 0, 116);
+  // These descriptors bypass open()'s existing journal admission. They are
+  // the read/stat paths that previously exposed partially copied buffers.
+  int fd = open(path, O_RDONLY);
+  CHECK(fd >= 0, 117);
+  for (int reader = 0; reader < 2; reader++) {
+    int pid = fork();
+    CHECK(pid >= 0, 118);
+    if (pid == 0) {
+      close(gate[1]);
+      close(done[0]);
+      close(done[1]);
+      CHECK(read(gate[0], &token, 1) == 1, 119);
+      if (reader == 0) {
+        CHECK(read(fd, published_data, sizeof(published_data)) ==
+              sizeof(published_data), 120);
+        for (int i = 0; i < sizeof(published_data); i++)
+          CHECK(published_data[i] == 'P', 121);
+        CHECK(write(1, "pub: READ_RETURNED\n", 19) == 19, 135);
+      } else {
+        CHECK(fstat(fd, &st) == 0 && st.size == sizeof(published_data), 122);
+        CHECK(write(1, "pub: STAT_RETURNED\n", 19) == 19, 135);
+      }
+      exit(0);
+    }
+  }
+  close(fd); // Finish inode close before publication can reserve the journal.
+  int committer = fork();
+  CHECK(committer >= 0, 123);
+  if (committer == 0) {
+    close(gate[0]);
+    close(gate[1]);
+    close(done[0]);
+    CHECK(xbegin() == SPEC_OK, 124);
+    int output = open(path, O_WRONLY | O_TRUNC);
+    CHECK(output >= 0, 125);
+    fill(output, 5, 'P');
+    close(output);
+    output = open(added_path, O_CREATE | O_WRONLY);
+    CHECK(output >= 0, 126);
+    CHECK(write(output, "metadata", 8) == 8, 127);
+    close(output);
+    CHECK(write(done[1], "C", 1) == 1, 128); // Buffered until durable commit.
+    CHECK(xcommit() == SPEC_OK, 129);
+    CHECK(write(1, "pub: COMMIT_RETURNED\n", 21) == 21, 135);
+    exit(0);
+  }
+  close(gate[0]);
+  close(done[1]);
+  // Console input is deliberately outside reader admission. The host sends
+  // G only after seeing CACHE_PARTIAL from the instrumented publication.
+  CHECK(read(0, &token, 1) == 1 && token == 'G', 130);
+  CHECK(read(0, &token, 1) == 1 && token == '\n', 131);
+  CHECK(write(gate[1], "RR", 2) == 2, 132);
+  close(gate[1]);
+  CHECK(read(done[0], &token, 1) == 1 && token == 'C', 133);
+  CHECK(write(1, "pub: OUTPUT_RECEIVED\n", 21) == 21, 135);
+  close(done[0]);
+  for (int i = 0; i < 3; i++)
+    CHECK(wait(&status) > 0 && status == 0, 134);
+  verify_publication();
+  CHECK(write(1, "pub: VISIBILITY PASSED\n", 23) == 23, 135);
+}
+
 static int
 run(const char *name, void (*test)(void))
 {
@@ -268,8 +364,17 @@ run(const char *name, void (*test)(void))
 }
 
 int
-main(void)
+main(int argc, char **argv)
 {
+  if (argc == 2 && strcmp(argv[1], "visibility") == 0) {
+    publication_visibility();
+    exit(0);
+  }
+  if (argc == 2 && strcmp(argv[1], "verify") == 0) {
+    verify_publication();
+    CHECK(write(1, "pub: REBOOT VERIFIED\n", 21) == 21, 135);
+    exit(0);
+  }
   if (run("snapshot publication", publish) ||
       run("oversize leaves real blocks unchanged", capacity) ||
       run("buffer cache capacity boundary", cache_limit) ||

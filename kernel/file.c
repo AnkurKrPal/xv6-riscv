@@ -12,6 +12,7 @@
 #include "file.h"
 #include "stat.h"
 #include "proc.h"
+#include "log.h"
 
 struct devsw devsw[NDEV];
 struct {
@@ -92,9 +93,11 @@ filestat(struct file *f, uint64 addr)
   struct stat st;
 
   if (f->type == FD_INODE || f->type == FD_DEVICE) {
+    log_read_enter();
     ilock(f->ip);
     stati(f->ip, &st);
     iunlock(f->ip);
+    log_read_leave();
     if (copyout(p->pagetable, p->sz, addr, (char *)&st, sizeof(st)) < 0)
       return -1;
     return 0;
@@ -119,10 +122,12 @@ fileread(struct file *f, uint64 addr, int n)
       return -1;
     r = devsw[f->major].read(1, addr, n);
   } else if (f->type == FD_INODE) {
+    log_read_enter();
     ilock(f->ip);
     if ((r = readi(f->ip, 1, addr, f->off, n)) > 0)
       f->off += r;
     iunlock(f->ip);
+    log_read_leave();
   } else {
     panic("fileread");
   }

@@ -7,6 +7,7 @@
 #include "fs.h"
 #include "buf.h"
 #include "spec_commit.h"
+#include "log.h"
 
 // Simple logging that allows concurrent FS system calls.
 //
@@ -47,12 +48,35 @@ struct log {
   int ncommit;
   int spec_committing;
   int spec_capacity; // On-disk payload and buffer-cache bound.
+  int readers;       // Whole inode read/stat operations outside begin_op().
+  int spec_waiters;  // Close admission while publishers drain existing work.
   struct logheader lh;
 };
 struct log log;
 
 static void recover_from_log(void);
 static void commit();
+
+#ifdef SPEC_COMMIT_TEST
+// Deterministic visibility regression only. This is excluded from the normal
+// kernel; the separate test target pauses with real buffers partially copied
+// and again with all copies made but no durable commit yet.
+static void
+publication_test_pause(char *phase)
+{
+  uint start;
+  printk("publication-test: %s\n", phase);
+  acquire(&tickslock);
+  start = ticks;
+  while ((uint)(ticks - start) < 20) {
+    sleep_prepare(&ticks);
+    release(&tickslock);
+    sleep();
+    acquire(&tickslock);
+  }
+  release(&tickslock);
+}
+#endif
 
 static int
 reserve_spec_log(int blocks)
@@ -61,13 +85,15 @@ reserve_spec_log(int blocks)
     return SPEC_ERR_NO_SPACE;
 
   acquire(&log.lock);
+  log.spec_waiters++;
   while (log.committing || log.spec_committing || log.outstanding != 0 ||
-         log.lh.n != 0) {
+         log.lh.n != 0 || log.readers != 0) {
     sleep_prepare(&log);
     release(&log.lock);
     sleep();
     acquire(&log.lock);
   }
+  log.spec_waiters--;
   log.spec_committing = 1;
   log.committing = 1;
   log.outstanding = 1;
@@ -79,11 +105,56 @@ static void
 release_spec_log(void)
 {
   acquire(&log.lock);
+  // A rejected snapshot never entered the journal; a published snapshot has
+  // synchronously completed write_log, write_head, install_trans and clearing
+  // the header. Readers must not be admitted until either case is complete.
+  if (log.lh.n != 0 || !log.spec_committing || !log.committing ||
+      log.outstanding != 1 || log.readers != 0)
+    panic("release_spec_log: incomplete");
   log.outstanding = 0;
   log.committing = 0;
   log.spec_committing = 0;
   log.ncommit++;
   wakeup(&log);
+  release(&log.lock);
+}
+
+// Register before acquiring any inode/buffer lock. Keeping admission for a
+// whole read prevents an old inode size/address set from being combined with
+// newly published data. Existing readers drain; pending publishers block new
+// readers and begin_op() callers, so neither stream can starve publication.
+void
+log_read_enter(void)
+{
+#ifdef SPEC_COMMIT_TEST
+  int reported = 0;
+#endif
+  acquire(&log.lock);
+  while (log.spec_committing || log.spec_waiters != 0) {
+#ifdef SPEC_COMMIT_TEST
+    if (!reported) {
+      printk("publication-test: READER_WAIT\n");
+      reported = 1;
+    }
+#endif
+    sleep_prepare(&log);
+    release(&log.lock);
+    sleep();
+    acquire(&log.lock);
+  }
+  log.readers++;
+  release(&log.lock);
+}
+
+void
+log_read_leave(void)
+{
+  acquire(&log.lock);
+  if (log.readers < 1)
+    panic("log_read_leave");
+  log.readers--;
+  if (log.readers == 0)
+    wakeup(&log);
   release(&log.lock);
 }
 
@@ -173,7 +244,7 @@ begin_op(void)
 {
   acquire(&log.lock);
   while (1) {
-    if (log.committing || log.spec_committing) {
+    if (log.committing || log.spec_committing || log.spec_waiters != 0) {
       sleep_prepare(&log);
       release(&log.lock);
       sleep();
@@ -353,8 +424,20 @@ spec_log_publish(spec_id_t spec, const struct spec_commit_block *blocks,
       memmove(bp->data, b->data, BSIZE);
       log_write(bp);
       brelse(bp);
+#ifdef SPEC_COMMIT_TEST
+      if (b == blocks)
+        publication_test_pause("CACHE_PARTIAL");
+#endif
     }
+#ifdef SPEC_COMMIT_TEST
+    if (blocks != 0)
+      publication_test_pause("CACHE_READY");
+#endif
     commit(); // Synchronous: durable before the coordinator releases output.
+#ifdef SPEC_COMMIT_TEST
+    if (blocks != 0)
+      printk("publication-test: DURABLE\n");
+#endif
   }
   release_spec_log();
   return result;

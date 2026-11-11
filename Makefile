@@ -104,6 +104,13 @@ $K/kernel: $(OBJS) $K/kernel.ld
 $K/%.o: $K/%.S
 	$(CC) -march=rv64gc -g $(DETFLAGS) -c -o $@ $<
 
+# R10/R11 visibility instrumentation is linked only into this test kernel.
+$K/log_publication_test.o: $K/log.c $K/log.h $K/spec_commit.h
+	$(CC) $(CFLAGS) -DSPEC_COMMIT_TEST -c -o $@ $<
+
+$K/kernel-publication-test: $(filter-out $K/log.o,$(OBJS)) $K/log_publication_test.o $K/kernel.ld
+	$(LD) $(LDFLAGS) -T $K/kernel.ld -o $@ $(filter-out $K/log.o,$(OBJS)) $K/log_publication_test.o
+
 tags: $(OBJS)
 	etags kernel/*.S kernel/*.c
 
@@ -169,7 +176,7 @@ fs.img: mkfs/mkfs README demo/demoFile.txt $(UPROGS)
 clean: 
 	rm -f *.tex *.dvi *.idx *.aux *.log *.ind *.ilg \
 	*/*.o */*.d */*.asm */*.sym \
-	$K/kernel fs.img \
+	$K/kernel $K/kernel-publication-test fs.img \
 	mkfs/mkfs .gdbinit \
         $U/usys.S \
 	$(UPROGS)

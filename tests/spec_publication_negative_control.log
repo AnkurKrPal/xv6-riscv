@@ -1,0 +1,21 @@
+Negative control: temporary kernel with only filestat admission removed.
+Expected rejection: b'STAT_RETURNED' escaped before durable commit
+
+xv6 kernel is booting
+
+test
+spec_output: steps 5 & 6 (L4 flush/discard & L9 safe failure) PASSED
+pipe: steps 7, 8, 9, 10 (L5, L6, L7, L10 pipe isolation and flush) PASSED
+init: starting sh
+$ speccommit visibility
+publication-test: CACHE_PARTIAL
+G
+publication-test: READER_WAIT
+pub: STAT_RETURNED
+publication-test: CACHE_READY
+publication-test: DURABLE
+pub: COMMIT_RETURNED
+pub: OUTPUT_RECEIVED
+pub: READ_RETURNED
+pub: VISIBILITY PASSED
+$ QEMU: Terminated
