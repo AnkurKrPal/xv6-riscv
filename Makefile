@@ -148,6 +148,11 @@ $U/_specoutput: $U/spectest_output.o $(ULIB) $U/user.ld
 	$(OBJDUMP) -S $@ > $U/specoutput.asm
 	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $U/specoutput.sym
 
+$U/_specbench: $U/spectest_bench.o $(ULIB) $U/user.ld
+	$(LD) $(LDFLAGS) -T $U/user.ld -o $@ $U/spectest_bench.o $(ULIB)
+	$(OBJDUMP) -S $@ > $U/specbench.asm
+	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $U/specbench.sym
+
 $U/_forktest: $U/forktest.o $(ULIB)
 	# forktest has less library code linked in - needs to be small
 	# in order to be able to max out the proc table.
@@ -189,6 +194,7 @@ UPROGS=\
 	$U/_speccommit\
 	$U/_agentd\
 	$U/_specoutput\
+	$U/_specbench\
 
 fs.img: mkfs/mkfs README demo/demoFile.txt $(UPROGS)
 	mkfs/mkfs fs.img README demo/demoFile.txt $(UPROGS)

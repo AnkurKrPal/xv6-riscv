@@ -1,0 +1,53 @@
+
+xv6 kernel is booting
+
+test
+spec_output: steps 5 & 6 (L4 flush/discard & L9 safe failure) PASSED
+pipe: steps 7, 8, 9, 10 (L5, L6, L7, L10 pipe isolation and flush) PASSED
+init: starting sh
+$ specbench
+=== xv6 Write Benchmark: Normal vs Speculative (1KB-64KB) ===
+Comparing write latency across file sizes.
+------------------------------------------------------------
+size 1 KB: normal = 0 ticks, spec = 0 ticks [OK]
+DATA,1,0,OK,0,OK
+size 2 KB: normal = 1 ticks, spec = 0 ticks [OK]
+DATA,2,1,OK,0,OK
+size 4 KB: normal = 1 ticks, spec = 0 ticks [OK]
+DATA,4,1,OK,0,OK
+size 8 KB: normal = 1 ticks, spec = 1 ticks [OK]
+DATA,8,1,OK,1,OK
+size 12 KB: normal = 2 ticks, spec = 0 ticks [OK]
+DATA,12,2,OK,0,OK
+size 16 KB: normal = 3 ticks, spec = 0 ticks [OK]
+DATA,16,3,OK,0,OK
+size 20 KB: normal = 4 ticks, spec = 0 ticks [OK]
+DATA,20,4,OK,0,OK
+size 24 KB: normal = 5 ticks, spec = 1 ticks [OK]
+DATA,24,5,OK,1,OK
+size 28 KB: normal = 5 ticks, spec = 0 ticks [OK]
+DATA,28,5,OK,0,OK
+size 32 KB: normal = 6 ticks, spec = 0 ticks [OK]
+DATA,32,6,OK,0,OK
+size 36 KB: normal = 8 ticks, spec = 1 ticks [OK]
+DATA,36,8,OK,1,OK
+size 40 KB: normal = 8 ticks, spec = 1 ticks [OK]
+DATA,40,8,OK,1,OK
+size 44 KB: normal = 8 ticks, spec = 0 ticks [OK]
+DATA,44,8,OK,0,OK
+size 48 KB: normal = 10 ticks, spec = 1 ticks [OK]
+DATA,48,10,OK,1,OK
+size 52 KB: normal = 10 ticks, spec = 0 ticks [OK]
+DATA,52,10,OK,0,OK
+size 56 KB: normal = 11 ticks, spec = 1 ticks [OK]
+DATA,56,11,OK,1,OK
+size 58 KB: normal = 11 ticks, spec = 1 ticks [OK]
+DATA,58,11,OK,1,OK
+size 60 KB: normal = 12 ticks, spec = CLIFF (out of shadow slots)
+DATA,60,12,OK,-1,CLIFF
+size 62 KB: normal = 12 ticks, spec = CLIFF (out of shadow slots)
+DATA,62,12,OK,-1,CLIFF
+size 64 KB: normal = 13 ticks, spec = CLIFF (out of shadow slots)
+DATA,64,13,OK,-1,CLIFF
+------------------------------------------------------------
+spectest_bench: ALL BENCHMARKS COMPLETED
