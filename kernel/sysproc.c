@@ -120,7 +120,8 @@ sys_xbegin(void)
 uint64
 sys_xcommit(void)
 {
-  return spec_commit();
+  // P3 owns publication and reports success only after its durability fence.
+  return spec_commit_transaction();
 }
 
 uint64

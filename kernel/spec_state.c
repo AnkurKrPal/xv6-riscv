@@ -321,11 +321,12 @@ spec_commit_finish(spec_id_t id, int committed)
     return SPEC_ERR_BUSY;
   }
 
-  g->state = committed ? SPEC_STATE_COMMITTED : SPEC_STATE_ABORTING;
+  // P3 calls this after publication succeeds or failed-commit cleanup ends.
+  // Only successful publication may record COMMITTED; rejection is ABORTED.
+  g->state = committed ? SPEC_STATE_COMMITTED : SPEC_STATE_ABORTED;
   p->spec = SPEC_ID_NONE;
   g->members = 0;
   g->id = SPEC_ID_NONE;
-  g->state = committed ? SPEC_STATE_FREE : SPEC_STATE_ABORTED;
   g->state = SPEC_STATE_FREE;
   release(&spectable.lock);
   wakeup(&spectable);
