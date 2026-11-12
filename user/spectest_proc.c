@@ -1,6 +1,7 @@
-// A12 (Ankur): syscall and process-lifecycle regression tests.
+// A12/A14 (Ankur): syscall, integrated effects and lifecycle regressions.
 #include "kernel/types.h"
 #include "kernel/param.h"
+#include "kernel/fcntl.h"
 #include "kernel/spec.h"
 #include "user/user.h"
 
@@ -238,6 +239,143 @@ failed_fork_cleanup(void)
   CHECK(xabort() == SPEC_OK, 7);
 }
 
+static void
+expect_contents(const char *path, const char *expected, int step)
+{
+  char data[4];
+  int fd = open(path, O_RDONLY);
+  CHECK(fd >= 0, step);
+  CHECK(read(fd, data, sizeof(data)) == 3, step + 1);
+  CHECK(memcmp(data, expected, 3) == 0, step + 2);
+  close(fd);
+}
+
+// One inherited group stages both file data and outside pipe output. A live
+// member blocks both finish requests; after exit, abort/commit must agree
+// across lifecycle, storage and output, and the next session must be clean.
+static void
+integrated_finish(int commit)
+{
+  const char *path = "proc-integrate";
+  int outward[2], ready[2], gate[2];
+  char token;
+  unlink(path);
+  int fd = open(path, O_CREATE | O_WRONLY | O_TRUNC);
+  CHECK(fd >= 0, 1);
+  CHECK(write(fd, "old", 3) == 3, 2);
+  close(fd);
+  sync();
+  CHECK(pipe(outward) == 0, 3);
+  int observer = fork(); // Predates begin, so it stays outside the group.
+  CHECK(observer >= 0, 4);
+  if (observer == 0) {
+    char data[4];
+    close(outward[1]);
+    if (commit) {
+      CHECK(read(outward[0], data, sizeof(data)) == 3, 5);
+      CHECK(memcmp(data, "new", 3) == 0, 6);
+    }
+    CHECK(read(outward[0], data, sizeof(data)) == 0, 7);
+    close(outward[0]);
+    expect_contents(path, commit ? "new" : "old", 8);
+    exit(0);
+  }
+
+  close(outward[0]);
+  CHECK(pipe(ready) == 0 && pipe(gate) == 0, 11);
+  CHECK(xbegin() == SPEC_OK, 12);
+  int member = fork();
+  CHECK(member >= 0, 13);
+  if (member == 0) {
+    close(ready[0]);
+    close(gate[1]);
+    fd = open(path, O_WRONLY);
+    CHECK(fd >= 0, 14);
+    CHECK(write(fd, "new", 3) == 3, 15);
+    close(fd);
+    CHECK(write(outward[1], "new", 3) == 3, 16);
+    CHECK(write(ready[1], "R", 1) == 1, 17);
+    CHECK(read(gate[0], &token, 1) == 1 && token == 'G', 18);
+    exit(0);
+  }
+  close(ready[1]);
+  close(gate[0]);
+  CHECK(read(ready[0], &token, 1) == 1 && token == 'R', 19);
+  CHECK(xcommit() == SPEC_ERR_BUSY, 20);
+  CHECK(xabort() == SPEC_ERR_BUSY, 21);
+  expect_contents(path, "new", 22);
+  CHECK(write(gate[1], "G", 1) == 1, 25);
+  close(ready[0]);
+  close(gate[1]);
+  wait_child(member, 0, 26);
+  CHECK((commit ? xcommit() : xabort()) == SPEC_OK, 27);
+  CHECK(xcommit() == SPEC_ERR_NO_ACTIVE, 28);
+  CHECK(xabort() == SPEC_ERR_NO_ACTIVE, 29);
+  // Commit a fresh empty session before closing the pipe: stale output from
+  // an abort would now reach the observer and fail its EOF assertion.
+  CHECK(xbegin() == SPEC_OK, 30);
+  CHECK(xcommit() == SPEC_OK, 31);
+  close(outward[1]);
+  wait_child(observer, 0, 32);
+  expect_contents(path, commit ? "new" : "old", 33);
+  CHECK(unlink(path) == 0, 36);
+}
+
+static void
+integrated_abort(void)
+{
+  integrated_finish(0);
+}
+
+static void
+integrated_commit(void)
+{
+  integrated_finish(1);
+}
+
+// Release independent groups together so SMP runs exercise the shared table
+// while other groups join, return BUSY, exit, finish and reuse their slots.
+static void
+concurrent_lifecycle(void)
+{
+  enum { WORKERS = 4, ROUNDS = 16 };
+  int gate[2], pids[WORKERS];
+  char token;
+  CHECK(pipe(gate) == 0, 1);
+  for (int i = 0; i < WORKERS; i++) {
+    pids[i] = fork();
+    CHECK(pids[i] >= 0, 2);
+    if (pids[i] == 0) {
+      close(gate[1]);
+      CHECK(read(gate[0], &token, 1) == 1 && token == 'G', 3);
+      close(gate[0]);
+      for (int round = 0; round < ROUNDS; round++)
+        fork_membership((round + i) & 1);
+      exit(0);
+    }
+  }
+  close(gate[0]);
+  for (int i = 0; i < WORKERS; i++)
+    CHECK(write(gate[1], "G", 1) == 1, 4);
+  close(gate[1]);
+  for (int i = 0; i < WORKERS; i++) {
+    int status = -1;
+    int pid = wait(&status);
+    CHECK(pid > 0 && status == 0, 5);
+    int found = 0;
+    for (int j = 0; j < WORKERS; j++) {
+      if (pids[j] == pid) {
+        pids[j] = -1;
+        found = 1;
+      }
+    }
+    CHECK(found, 6);
+  }
+  CHECK(wait(0) == -1, 7);
+  CHECK(xbegin() == SPEC_OK, 8);
+  CHECK(xcommit() == SPEC_OK, 9);
+}
+
 static int
 run(const char *name, void (*test)(void))
 {
@@ -305,6 +443,9 @@ main(void)
     {"reuse after finish", reuse_after_finish},
     {"reuse after exit", reuse_after_exit},
     {"failed fork cleanup", failed_fork_cleanup},
+    {"integrated abort", integrated_abort},
+    {"integrated commit", integrated_commit},
+    {"concurrent lifecycle", concurrent_lifecycle},
   };
 
   for (int i = 0; i < sizeof(tests) / sizeof(tests[0]); i++) {
