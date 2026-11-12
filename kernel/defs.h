@@ -64,6 +64,7 @@ void            spec_shadow_discard(spec_id_t);
 int             spec_fs_commit(spec_id_t);
 
 // speculative external output (spec_output.c)
+// added by Pal B24CS1078 (L1, L4, L8, L9)
 void            spec_output_init(void);
 int             spec_output_enqueue(spec_id_t, int, struct pipe*, const char*, int);
 int             spec_output_write_console(spec_id_t, int, uint64, int);
@@ -131,6 +132,7 @@ int             pipealloc(struct file**, struct file**);
 void            pipeclose(struct pipe*, int);
 int             piperead(struct pipe*, uint64, int);
 int             pipewrite(struct pipe*, uint64, int);
+// added by Pal B24CS1078 (L5, L6, L7, L10)
 void            pipe_add_spec_ref(struct pipe*);
 void            pipe_drop_spec_ref(struct pipe*);
 int             pipe_deliver_spec_chunk(struct pipe*, const char*, int);
@@ -138,6 +140,7 @@ void            pipe_selftest(void);
 void            pipe_reset_spec(struct pipe*, spec_id_t, int);
 
 // file.c
+// added by Pal B24CS1078 (L10)
 void            pipe_spec_discard(spec_id_t);
 void            pipe_spec_commit(spec_id_t);
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# created by Pal B24CS1078
 """
 L14: Parse benchmark output and plot comparative graph of Normal vs Speculative writes.
 Demonstrates write cost scaling from 1 KB to 64 KB and the shadow table capacity cliff.

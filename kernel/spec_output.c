@@ -1,3 +1,4 @@
+// created by Pal B24CS1078 (L1, L4, L8, L9, L10)
 #include "types.h"
 #include "param.h"
 #include "riscv.h"
@@ -54,12 +55,14 @@ struct spec_out_queue {
 /*
  * Global table of per-spec output queues protected by a spinlock.
  */
+// added by Pal B24CS1078
 static struct {
   struct spinlock lock;
   struct spec_out_queue queues[SPEC_OUTPUT_MAX_SPECS];
 } spec_out_table;
 
 // Caller must hold spec_out_table.lock.
+// added by Pal B24CS1078
 static struct spec_out_queue *
 find_queue_locked(spec_id_t spec)
 {
@@ -74,6 +77,7 @@ find_queue_locked(spec_id_t spec)
 }
 
 // Caller must hold spec_out_table.lock.
+// added by Pal B24CS1078
 static struct spec_out_queue *
 get_or_alloc_queue_locked(spec_id_t spec)
 {
@@ -101,6 +105,7 @@ get_or_alloc_queue_locked(spec_id_t spec)
   return 0; // No free queue slot
 }
 
+// added by Pal B24CS1078 (L1, L9)
 int
 spec_output_enqueue(spec_id_t spec, int target, struct pipe *pi, const char *data, int len)
 {
@@ -161,6 +166,7 @@ spec_output_enqueue(spec_id_t spec, int target, struct pipe *pi, const char *dat
   return SPEC_OK;
 }
 
+// added by Pal B24CS1078 (L9)
 int
 spec_output_avail(spec_id_t spec)
 {
@@ -193,6 +199,7 @@ spec_output_avail(spec_id_t spec)
   return avail;
 }
 
+// added by Pal B24CS1078 (L2, L9)
 int
 spec_output_write_console(spec_id_t spec, int user_src, uint64 src, int n)
 {
@@ -226,6 +233,7 @@ spec_output_write_console(spec_id_t spec, int user_src, uint64 src, int n)
   return written;
 }
 
+// added by Pal B24CS1078 (L6, L9, L10)
 int
 spec_output_write_pipe(spec_id_t spec, struct pipe *pi, const char *kbuf, int n)
 {
@@ -252,6 +260,7 @@ spec_output_write_pipe(spec_id_t spec, struct pipe *pi, const char *kbuf, int n)
 }
 
 // Step 16 (L8): Preserve output ordering; flush only when P3 confirms commit
+// added by Pal B24CS1078 (L4, L8, L10)
 int
 spec_output_flush(spec_id_t spec)
 {
@@ -310,6 +319,7 @@ spec_output_flush(spec_id_t spec)
   return SPEC_OK;
 }
 
+// added by Pal B24CS1078 (L4, L10)
 void
 spec_output_discard(spec_id_t spec)
 {
@@ -336,6 +346,7 @@ spec_output_discard(spec_id_t spec)
   release(&spec_out_table.lock);
 }
 
+// added by Pal B24CS1078
 int
 spec_output_count(spec_id_t spec)
 {
@@ -353,6 +364,7 @@ spec_output_count(spec_id_t spec)
   return count;
 }
 
+// added by Pal B24CS1078
 int
 spec_output_bytes(spec_id_t spec)
 {
@@ -370,6 +382,7 @@ spec_output_bytes(spec_id_t spec)
   return bytes;
 }
 
+// added by Pal B24CS1078
 int
 spec_output_is_empty(spec_id_t spec)
 {
@@ -377,6 +390,7 @@ spec_output_is_empty(spec_id_t spec)
 }
 
 // Verification self-test for FIFO ordering, bounded capacity, coalescing, and discard
+// added by Pal B24CS1078
 static void
 spec_output_selftest(void)
 {
@@ -436,6 +450,7 @@ spec_output_selftest(void)
 
 }
 
+// added by Pal B24CS1078 (L1)
 void
 spec_output_init(void)
 {

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# created by Pal B24CS1078
 # L14: Automate QEMU benchmark execution and generate performance graph.
 
 set -e

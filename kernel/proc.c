@@ -54,6 +54,7 @@ procinit(void)
   struct proc *p;
 
   specinit();
+  // added by Pal B24CS1078 (L1)
   spec_output_init();
 
   initlock(&pid_lock, "nextpid");

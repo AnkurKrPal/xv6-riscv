@@ -66,6 +66,7 @@ consolewrite(int user_src, uint64 src, int n)
 
   // Step 3 (L2) & Step 16 (L8): Intercept speculative console writes;
   // preserved in FIFO order and flushed only upon durable commit
+  // modified by Pal B24CS1078 (L2, L3, L8)
   if (p && p->spec != SPEC_ID_NONE) {
     return spec_output_write_console(p->spec, user_src, src, n);
   }

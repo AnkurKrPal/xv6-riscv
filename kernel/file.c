@@ -24,6 +24,7 @@ void
 fileinit(void)
 {
   initlock(&ftable.lock, "ftable");
+  // added by Pal B24CS1078
   pipe_selftest();
 }
 
@@ -184,6 +185,7 @@ filewrite(struct file *f, uint64 addr, int n)
   return ret;
 }
 
+// added by Pal B24CS1078 (L10)
 void
 pipe_spec_discard(spec_id_t spec)
 {
@@ -199,6 +201,7 @@ pipe_spec_discard(spec_id_t spec)
   release(&ftable.lock);
 }
 
+// added by Pal B24CS1078 (L10)
 void
 pipe_spec_commit(spec_id_t spec)
 {

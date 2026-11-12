@@ -1,3 +1,4 @@
+// created by Pal B24CS1078
 // L13: Performance benchmark comparing normal vs speculative writes (1 KB - 64 KB).
 // Measures execution cost and demonstrates the shadow table capacity cliff (NSHADOW=64).
 

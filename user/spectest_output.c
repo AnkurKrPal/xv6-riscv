@@ -1,3 +1,4 @@
+// created by Pal B24CS1078
 // L11, L12, L8: User-space output and pipe speculative tests
 // Verifies same-spec immediacy, outside buffering, shared-FD inheritance,
 // mixed reader rejection, discard on abort, and console visibility.

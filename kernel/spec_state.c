@@ -366,7 +366,7 @@ spec_abort(void)
 
   spec_shadow_discard(id);
   spec_output_discard(id);
-  pipe_spec_discard(id);
+  pipe_spec_discard(id); // added by Pal B24CS1078 (L10)
 
   acquire(&spectable.lock);
   p->spec = SPEC_ID_NONE;
@@ -442,7 +442,7 @@ spec_leave(spec_id_t id)
   // Cleanup takes module locks; never hold spectable.lock across it.
   spec_shadow_discard(id);
   spec_output_discard(id);
-  pipe_spec_discard(id);
+  pipe_spec_discard(id); // added by Pal B24CS1078 (L10)
 
   acquire(&spectable.lock);
   g->state = SPEC_STATE_ABORTED;

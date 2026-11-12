@@ -17,8 +17,8 @@ struct pipe {
   uint nwrite;   // number of bytes written
   int readopen;  // read fd is still open
   int writeopen; // write fd is still open
-  spec_id_t spec; // speculation ID for uncommitted same-spec data, or SPEC_ID_NONE
-  int spec_refs; // count of buffered speculative output references
+  spec_id_t spec; // added by Pal B24CS1078: speculation ID for uncommitted same-spec data, or SPEC_ID_NONE
+  int spec_refs; // added by Pal B24CS1078: count of buffered speculative output references
 };
 
 extern struct proc proc[NPROC];
@@ -30,6 +30,7 @@ enum pipe_reader_type {
   PIPE_READERS_MIXED = 3,
 };
 
+// added by Pal B24CS1078 (L7)
 enum pipe_reader_type
 pipe_classify_readers(struct pipe *pi, spec_id_t writer_spec)
 {
@@ -125,6 +126,7 @@ pipeclose(struct pipe *pi, int writable)
     release(&pi->lock);
 }
 
+// added by Pal B24CS1078
 void
 pipe_add_spec_ref(struct pipe *pi)
 {
@@ -135,6 +137,7 @@ pipe_add_spec_ref(struct pipe *pi)
   release(&pi->lock);
 }
 
+// added by Pal B24CS1078
 void
 pipe_drop_spec_ref(struct pipe *pi)
 {
@@ -151,6 +154,7 @@ pipe_drop_spec_ref(struct pipe *pi)
   }
 }
 
+// added by Pal B24CS1078
 int
 pipe_deliver_spec_chunk(struct pipe *pi, const char *buf, int len)
 {
@@ -184,6 +188,7 @@ pipe_deliver_spec_chunk(struct pipe *pi, const char *buf, int len)
   return i;
 }
 
+// added by Pal B24CS1078
 void
 pipe_reset_spec(struct pipe *pi, spec_id_t spec, int discard)
 {
@@ -200,6 +205,7 @@ pipe_reset_spec(struct pipe *pi, spec_id_t spec, int discard)
   release(&pi->lock);
 }
 
+// modified by Pal B24CS1078 (L5, L6, L9, L10)
 int
 pipewrite(struct pipe *pi, uint64 addr, int n)
 {
@@ -303,6 +309,7 @@ pipewrite(struct pipe *pi, uint64 addr, int n)
   return i;
 }
 
+// modified by Pal B24CS1078 (L5, L7)
 int
 piperead(struct pipe *pi, uint64 addr, int n)
 {
@@ -332,6 +339,7 @@ piperead(struct pipe *pi, uint64 addr, int n)
   }
 
   // Step 9 (L7): Outside reader must not see uncommitted speculative data
+  // added by Pal B24CS1078
   if (pi->spec != SPEC_ID_NONE && spec != pi->spec) {
     release(&pi->lock);
     return 0;
@@ -361,6 +369,7 @@ piperead(struct pipe *pi, uint64 addr, int n)
 }
 
 // Verification selftest for L5, L6, L7, L10 pipe isolation and buffering
+// added by Pal B24CS1078
 void
 pipe_selftest(void)
 {

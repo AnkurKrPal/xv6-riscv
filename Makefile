@@ -143,11 +143,13 @@ $U/_speccommit: $U/spectest_commit.o $(ULIB) $U/user.ld
 	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $U/speccommit.sym
 
 # Source follows Pal's ownership name; executable fits xv6's 14-byte DIRSIZ.
+# added by Pal B24CS1078 (L11, L12)
 $U/_specoutput: $U/spectest_output.o $(ULIB) $U/user.ld
 	$(LD) $(LDFLAGS) -T $U/user.ld -o $@ $U/spectest_output.o $(ULIB)
 	$(OBJDUMP) -S $@ > $U/specoutput.asm
 	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $U/specoutput.sym
 
+# added by Pal B24CS1078 (L13)
 $U/_specbench: $U/spectest_bench.o $(ULIB) $U/user.ld
 	$(LD) $(LDFLAGS) -T $U/user.ld -o $@ $U/spectest_bench.o $(ULIB)
 	$(OBJDUMP) -S $@ > $U/specbench.asm
